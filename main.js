@@ -1,12 +1,5 @@
-/**
- * WhatsApp Cloud API Webhook Listener
- * * This server uses Express.js to listen for GET and POST requests
- * on the specific endpoint '/whatsapp/webhook', which is required
- * by Meta for both webhook verification and receiving messages.
- */
-const express = require('express');
 
-// Create an Express application instance
+const express = require('express');
 const app = express();
 
 // Middleware to parse incoming JSON bodies from webhooks
