@@ -14,7 +14,7 @@ const verifyToken = process.env.VERIFY_TOKEN;
 
 // The Phone Number ID and Access Token must be set on Render
 const waPhoneNumberId = process.env.WHATSAPP_PHONE_ID; 
-const accessToken = process.env.ACCESS_TOKEN;
+const accessToken = process.env.WHATSAPP_TOKEN;
 const API_URL = `https://graph.facebook.com/v20.0/${waPhoneNumberId}/messages`; // Use the latest stable version
 
 // --- Send Message Function ---
