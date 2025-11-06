@@ -1,156 +1,154 @@
-const express = require('express');
-const app = express();
-// Using native 'fetch' which is available in Node.js 18+.
-// If using an older version, install node-fetch (npm install node-fetch) and require it.
+import express from 'express';
+import 'dotenv/config';
 
-// Middleware to parse incoming JSON bodies from webhooks
-app.use(express.json());
+// --- Node 18+ has fetch built-in ---
+require('dotenv').config();
 
-// --- Configuration (Loaded from Render Environment Variables) ---
+// --- Configuration ---
 const port = process.env.PORT || 3000;
+const verifyToken = process.env.VERIFY_TOKEN;
+const WA_TOKEN = process.env.WHATSAPP_TOKEN;
+const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
-// The VERIFY_TOKEN must match the one set in your Meta App Webhook configuration
-const verifyToken = process.env.VERIFY_TOKEN; 
+// Laravel API base URL (localtunnel)
+const LARAVEL_API_BASE = "https://lazy-crabs-roll.loca.lt/api"; 
 
-// The WHATSAPP_TOKEN and PHONE_ID are crucial for sending replies
-const WA_TOKEN = process.env.WHATSAPP_TOKEN; 
-const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID; 
-
-// Base URL for sending messages
+// WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
 
-// --- Utility Function to Send WhatsApp Messages ---
+// --- Middleware ---
+app.use(express.json());
 
-/**
- * Sends a text message response via the WhatsApp Cloud API.
- * @param {string} to - The recipient's phone number (the sender of the incoming message).
- * @param {string} text - The text content of the reply message.
- */
+// --- Helper: Send WhatsApp Message ---
 async function sendMessage(to, text) {
-    if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
-        console.error("!!! FATAL: WHATSAPP_TOKEN or WHATSAPP_PHONE_ID is not set. Cannot send message. !!!");
-        return;
+  if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
+    console.error("⚠ Missing WHATSAPP_TOKEN or WHATSAPP_PHONE_ID. Cannot send message.");
+    return;
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: to,
+    type: "text",
+    text: {
+      preview_url: false,
+      body: text
     }
+  };
 
-    const payload = {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: to, // The sender of the incoming message becomes the recipient of the reply
-        type: "text",
-        text: {
-            preview_url: false,
-            body: text
-        }
-    };
+  try {
+    console.log(`\n[SENDING] Replying to ${to}...`);
+    const response = await fetch(API_BASE_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WA_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
 
-    try {
-        console.log(`\n[SENDING] Attempting to reply to ${to}...`);
-        
-        const response = await fetch(API_BASE_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${WA_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        });
-
-        if (response.ok) {
-            console.log(`[REPLY SENT] Successfully echoed message to ${to}.`);
-        } else {
-            // Log detailed error from Meta API if available
-            const errorData = await response.json();
-            console.error(`!!! ERROR SENDING MESSAGE to ${to} (${response.status} ${response.statusText}) !!!`);
-            console.error("Meta API Response Error:", JSON.stringify(errorData, null, 2));
-        }
-
-    } catch (error) {
-        console.error("!!! ERROR DURING FETCH OR NETWORK FAILURE !!!");
-        console.error(error.message);
+    if (response.ok) {
+      console.log(`[✅] Message sent to ${to}`);
+    } else {
+      const errorData = await response.json();
+      console.error("❌ Error sending message:", errorData);
     }
+  } catch (err) {
+    console.error("❌ Network error:", err.message);
+  }
 }
 
+// --- Helper: Save Baby Data to Laravel ---
+async function saveBabyToLaravel(babyData) {
+  try {
+    console.log(`🟢 Sending data to Laravel API:`, babyData);
+
+    const response = await fetch(`${LARAVEL_API_BASE}/babies`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // Add Authorization here later if Sanctum is required
+      },
+      body: JSON.stringify(babyData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("❌ Laravel API error:", errorData);
+    } else {
+      console.log("✅ Baby saved successfully in Laravel!");
+    }
+  } catch (err) {
+    console.error("❌ Error connecting to Laravel:", err.message);
+  }
+}
 
 // --- Health Check Route ---
 app.get('/', (req, res) => {
-    res.status(200).send("Server is running. Webhook listener is active on /whatsapp/webhook");
+  res.status(200).send("Server is running. Webhook listener is active on /whatsapp/webhook");
 });
 
-
-// 1. --- Webhook Verification (GET Request) ---
+// --- Webhook Verification (GET) ---
 app.get('/whatsapp/webhook', (req, res) => {
-    // Extract challenge, mode, and token from query parameters
-    const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
+  const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
 
-    // Check if mode is 'subscribe' and the tokens match exactly
-    if (mode === 'subscribe' && token === verifyToken) {
-        // Respond with the challenge token to complete verification
-        console.log('--- WEBHOOK VERIFIED ---');
-        res.status(200).send(challenge);
-    } else {
-        // If tokens don't match or mode is wrong, reject the request
-        console.log('!!! WEBHOOK VERIFICATION FAILED !!!');
-        res.status(403).end();
-    }
+  if (mode === 'subscribe' && token === verifyToken) {
+    console.log('✅ Webhook verified with Meta!');
+    res.status(200).send(challenge);
+  } else {
+    console.log('❌ Webhook verification failed.');
+    res.sendStatus(403);
+  }
 });
 
+// --- Handle Incoming WhatsApp Messages (POST) ---
+app.post('/whatsapp/webhook', async (req, res) => {
+  // Always respond immediately to prevent Meta retries
+  res.sendStatus(200);
 
-// 2. --- Handle Incoming Messages (POST Request) ---
-app.post('/whatsapp/webhook', (req, res) => {
-    // Step 1: ALWAYS respond quickly with a 200 OK to prevent Meta from retrying the notification
-    res.status(200).end(); 
+  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  console.log(`\n--- [${timestamp}] Incoming webhook received ---`);
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    console.log(`\n\n--- Webhook received ${timestamp} ---`);
-    
-    const body = req.body;
-    
-    if (body.object === 'whatsapp_business_account') {
-        if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
-            // This structure indicates a received message
-            const messageData = body.entry[0].changes[0].value;
-            const messages = messageData.messages;
+  const body = req.body;
 
-            if (messages) {
-                messages.forEach(message => {
-                    // We only process incoming text messages for the echo bot
-                    if (message.type === 'text') {
-                        const incomingText = message.text.body;
-                        const senderId = message.from; // This is your verified phone number
+  if (body.object === 'whatsapp_business_account') {
+    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
 
-                        // Step 2: Log the incoming message
-                        console.log(`\n-> New message from ${senderId}: "${incomingText}"`);
+    if (messages && messages.length > 0) {
+      for (const message of messages) {
+        if (message.type === 'text') {
+          const incomingText = message.text.body.trim();
+          const senderId = message.from;
 
-                        // Step 3: Construct and send the echo reply (using the context that you are in Kenya)
-                        const replyText = `Hello! You said: "${incomingText}". Your echo bot is working live from Kenya! 🇰🇪`;
-                        
-                        sendMessage(senderId, replyText);
-                    } else {
-                         // Handle other message types if necessary
-                         console.log(`-> Received non-text message of type: ${message.type}. Not sending echo.`);
-                    }
-                });
-            }
-            
-        } else {
-            // Log other non-message events (e.g., message status updates)
-            console.log('Received Non-Message Event Payload (e.g., status updates).');
-        }
-    } else {
-        // Log unexpected payloads
-        console.log('Received Unexpected Payload.');
-    }
-});
+          console.log(`💬 Message from ${senderId}: "${incomingText}"`);
 
+          // Example: Save message as a baby name for now
+          const babyData = {
+            name: incomingText,
+            gender: "Female",
+            date_of_birth: "2023-11-01",
+            guardian_id: 1
+          };
 
-// --- Start the server ---
-app.listen(port, () => {
-    console.log(`\nServer is running on port ${port}`);
-    console.log(`Webhook endpoint: /whatsapp/webhook`);
-    if (!verifyToken) {
-        console.warn("\n!!! WARNING: VERIFY_TOKEN is not set. Webhook verification will fail. !!!\n");
-    }
-    if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
-        console.warn("\n!!! WARNING: WHATSAPP_TOKEN or WHATSAPP_PHONE_ID is not set. Message sending will fail. !!!\n");
+          await saveBabyToLaravel(babyData);
+          await sendMessage(senderId, `✅ Baby "${incomingText}" saved successfully in the system.`);
+        } else {
+          console.log(`📩 Non-text message received: ${message.type}`);
+        }
+      }
+    } else {
+      console.log("ℹ No messages in this webhook.");
     }
+  } else {
+    console.log("⚠ Unrecognized webhook payload structure.");
+  }
+});
+
+// --- Start Server ---
+app.listen(port, () => {
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`🌍 Webhook endpoint: /whatsapp/webhook`);
+  if (!verifyToken) console.warn("⚠ VERIFY_TOKEN not set. Webhook verification may fail.");
+  if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) console.warn("⚠ WhatsApp credentials missing. Replies will fail.");
 });
