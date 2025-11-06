@@ -13,7 +13,7 @@ const port = process.env.PORT || 3000;
 const verifyToken = process.env.VERIFY_TOKEN; 
 
 // The Phone Number ID and Access Token must be set on Render
-const waPhoneNumberId = process.env.WA_PHONE_NUMBER_ID; 
+const waPhoneNumberId = process.env.WHATSAPP_PHONE_ID; 
 const accessToken = process.env.ACCESS_TOKEN;
 const API_URL = `https://graph.facebook.com/v20.0/${waPhoneNumberId}/messages`; // Use the latest stable version
 
