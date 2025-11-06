@@ -1,8 +1,8 @@
 import express from 'express';
 import 'dotenv/config';
 
-// --- Node 18+ has fetch built-in ---
-require('dotenv').config();
+// Initialize Express app
+const app = express();
 
 // --- Configuration ---
 const port = process.env.PORT || 3000;
