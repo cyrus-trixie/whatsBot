@@ -1,66 +1,38 @@
-/**
- * WhatsApp Cloud API Webhook Listener & Echo Bot
- * This server uses Express.js to listen for webhooks and axios to send replies.
- */
-const express = require('express');
-const axios = require('axios'); // <-- NEW: Import axios for API calls
 
+const express = require('express');
 const app = express();
+
+// Middleware to parse incoming JSON bodies from webhooks
 app.use(express.json());
 
-// --- Configuration (IMPORTANT: Set these as environment variables on Render) ---
+// --- Configuration ---
+// PORT defaults to 3000 if not set in environment (Render often sets its own PORT)
 const port = process.env.PORT || 3000;
+
+// The VERIFY_TOKEN must be set as an environment variable on Render
 const verifyToken = process.env.VERIFY_TOKEN; 
 
-// The Phone Number ID and Access Token must be set on Render
-const waPhoneNumberId = process.env.WHATSAPP_PHONE_ID; 
-const accessToken = process.env.WHATSAPP_TOKEN;
-const API_URL = `https://graph.facebook.com/v20.0/${waPhoneNumberId}/messages`; // Use the latest stable version
-
-// --- Send Message Function ---
-/**
- * Sends a text message back to a specific WhatsApp number.
- * @param {string} to - The WhatsApp number to send the message to (e.g., '2547xxxxxx').
- * @param {string} text - The message body.
- */
-async function sendMessage(to, text) {
-    try {
-        const payload = {
-            messaging_product: 'whatsapp',
-            recipient_type: 'individual',
-            to: to,
-            type: 'text',
-            text: {
-                // The WhatsApp API allows free-form text when replying within a 24-hour window
-                body: text 
-            }
-        };
-
-        await axios.post(API_URL, payload, {
-            headers: {
-                'Content-Type': 'application/json',
-                // Authorization header uses the permanent or temporary access token
-                'Authorization': `Bearer ${accessToken}`
-            }
-        });
-
-        console.log(`[REPLY SENT] to ${to}: "${text}"`);
-
-    } catch (error) {
-        console.error('!!! ERROR sending message:', error.response ? error.response.data : error.message);
-    }
-}
+// --- Health Check Route ---
+// A simple route for checking server status at the root URL
+app.get('/', (req, res) => {
+    res.status(200).send("Server is running. Webhook listener is active on /whatsapp/webhook");
+});
 
 
 // 1. --- Webhook Verification (GET Request) ---
+// Use this full URL in the Meta Developer Portal Callback URL field:
+// https://whatsbot-7muk.onrender.com/whatsapp/webhook
 app.get('/whatsapp/webhook', (req, res) => {
-    // ... (Verification logic remains the same)
+    // Extract challenge, mode, and token from query parameters
     const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
 
+    // Check if mode is 'subscribe' and the tokens match exactly
     if (mode === 'subscribe' && token === verifyToken) {
+        // Respond with the challenge token to complete verification
         console.log('--- WEBHOOK VERIFIED ---');
         res.status(200).send(challenge);
     } else {
+        // If tokens don't match or mode is wrong, reject the request
         console.log('!!! WEBHOOK VERIFICATION FAILED !!!');
         res.status(403).end();
     }
@@ -68,14 +40,24 @@ app.get('/whatsapp/webhook', (req, res) => {
 
 
 // 2. --- Handle Incoming Messages (POST Request) ---
+// This is where all the actual message events and status updates are sent.
 app.post('/whatsapp/webhook', (req, res) => {
-    // ALWAYS respond quickly with a 200 OK
-    res.status(200).end(); 
+    // ALWAYS respond quickly with a 200 OK to prevent Meta from retrying the notification
+    res.status(200).end();
 
+    // Log the incoming payload for inspection (you would process the message here)
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    console.log(`\n\n--- Webhook received ${timestamp} ---`);
+    
     const body = req.body;
     
     if (body.object === 'whatsapp_business_account') {
         if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
+            // This structure indicates a received message (or status update)
+            console.log('Received Message Payload:');
+            console.log(JSON.stringify(body, null, 2));
+
+            // --- MESSAGE PROCESSING LOGIC GOES HERE ---
             const messageData = body.entry[0].changes[0].value;
             const messages = messageData.messages;
 
@@ -83,21 +65,22 @@ app.post('/whatsapp/webhook', (req, res) => {
                 messages.forEach(message => {
                     if (message.type === 'text') {
                         const incomingText = message.text.body;
-                        const senderId = message.from; // This is the user's phone number
-
+                        const senderId = message.from;
                         console.log(`\n-> New message from ${senderId}: "${incomingText}"`);
-
-                        // --- ECHO BOT LOGIC ---
-                        // 1. Get sender ID (which is the recipient for the reply)
-                        // 2. Determine the reply text (simple echo + Kenyan context)
-                        let replyText = `Hello! You sent: "${incomingText}". I'm running live on Render in Kenya!`;
-
-                        // 3. Call the sendMessage function to reply
-                        sendMessage(senderId, replyText); 
+                        // Your reply logic would be called here.
                     }
                 });
             }
+            
+        } else {
+            // Log other non-message events
+            console.log('Received Non-Message Event Payload (e.g., status updates, capability changes):');
+            console.log(JSON.stringify(body, null, 2));
         }
+    } else {
+        // Log unexpected payloads
+        console.log('Received Unexpected Payload:');
+        console.log(JSON.stringify(body, null, 2));
     }
 });
 
@@ -105,7 +88,8 @@ app.post('/whatsapp/webhook', (req, res) => {
 // --- Start the server ---
 app.listen(port, () => {
     console.log(`\nServer is running on port ${port}`);
-    if (!waPhoneNumberId || !accessToken) {
-         console.warn("\n!!! WARNING: WA_PHONE_NUMBER_ID or ACCESS_TOKEN is missing. Sending messages will fail. !!!\n");
+    console.log(`Webhook endpoint: /whatsapp/webhook`);
+    if (!verifyToken) {
+        console.warn("\n!!! WARNING: VERIFY_TOKEN is not set in environment variables. Webhook verification will fail. !!!\n");
     }
 });
