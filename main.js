@@ -99,7 +99,7 @@ async function saveBabyToLaravel(babyData) {
   try {
     console.log('🟢 Sending data to Laravel API:, babyData');
 
-    const response = await fetch(`${LARAVEL_API_BASE}`/babies, {
+    const response = await fetch(`${LARAVEL_API_BASE}`/babyData, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
