@@ -10,9 +10,9 @@ const verifyToken = process.env.VERIFY_TOKEN;
 const WA_TOKEN = process.env.WHATSAPP_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
-// Laravel API base URL. Using 127.0.0.1:8000 since Laravel is running locally.
-const LARAVEL_API_BASE = "https://b25fa3b43f55.ngrok-free.app/api"; 
-// const LARAVEL_API_BASE = "https://lazy-crabs-roll.loca.lt/api"; // Your previous loca.lt URL for reference
+// Ensure this is set to your current, running Ngrok URL on Render's side!
+// Example: https://b25fa3b43f55.ngrok-free.app/api
+const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE;
 
 // WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
@@ -61,40 +61,43 @@ async function sendMessage(to, text) {
 }
 
 // --- Helper: Fetch Data from Laravel (GET) ---
-/**
- * Fetches data from a specified Laravel API endpoint.
- * @param {string} endpointPath - e.g., '/babies' or '/doctors/1'
- * @returns {Promise<object | null>} The JSON data or null on error.
- */
 async function fetchFromLaravel(endpointPath) {
-    try {
-        console.log(`📡 Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
-
-        const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-                // Authorization headers would go here if required by Laravel Sanctum/Passport
-            },
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`❌ Laravel GET API error for ${endpointPath}: ${response.status} - ${errorText}`);
-            return null;
-        }
-
-        const data = await response.json();
-        return data;
-
-    } catch (err) {
-        console.error("❌ Error connecting to Laravel:", err.message);
+    if (!LARAVEL_API_BASE) {
+        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
         return null;
     }
+    try {
+        console.log(`📡 Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
+
+        const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                // Authorization headers would go here if required by Laravel Sanctum/Passport
+            },
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`❌ Laravel GET API error for ${endpointPath}: ${response.status} - ${errorText}`);
+            return null;
+        }
+
+        const data = await response.json();
+        return data;
+
+    } catch (err) {
+        console.error("❌ Error connecting to Laravel:", err.message);
+        return null;
+    }
 }
 
 // --- Helper: Save Baby Data to Laravel (POST) ---
 async function saveBabyToLaravel(babyData) {
+    if (!LARAVEL_API_BASE) {
+        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
+        return;
+    }
   try {
     console.log(`🟢 Sending data to Laravel API:`, babyData);
 
@@ -157,28 +160,29 @@ app.post('/whatsapp/webhook', async (req, res) => {
 
           console.log(`💬 Message from ${senderId}: "${incomingText}"`);
 
-            // Check if the user wants to list all babies
-            if (incomingText === 'babies') {
-                const babyResponse = await fetchFromLaravel('/babies');
+            // Check if the user wants to list all babies
+            if (incomingText === 'babies') {
+                const babyResponse = await fetchFromLaravel('/babies');
 
-                if (babyResponse && babyResponse.data && babyResponse.data.length > 0) {
-                    const babyList = babyResponse.data.map(baby => {
-                        // Assuming the 'babies' table has 'first_name' and 'date_of_birth'
-                        const dob = baby.date_of_birth ? new Date(baby.date_of_birth).toLocaleDateString('en-KE') : 'Unknown';
-                        return `👶 ${baby.first_name} (DOB: ${dob}, Status: ${baby.immunization_status || 'N/A'})`;
-                    }).join('\n');
+                // *** FIX: Changed .data to .babies to match API response structure ***
+                if (babyResponse && babyResponse.babies && babyResponse.babies.length > 0) {
+                    const babyList = babyResponse.babies.map(baby => { // Use .babies here
+                        // Assuming the 'babies' table has 'first_name' and 'date_of_birth'
+                        const dob = baby.date_of_birth ? new Date(baby.date_of_birth).toLocaleDateString('en-KE') : 'Unknown';
+                        return `👶 ${baby.first_name} (DOB: ${dob}, Status: ${baby.immunization_status || 'N/A'})`;
+                    }).join('\n');
 
-                    await sendMessage(senderId, `Found ${babyResponse.data.length} Babies:\n\n${babyList}`);
-                } else {
-                    await sendMessage(senderId, "✅ No baby records found in the system.");
-                }
-                
-                return; // Stop processing further
-            }
+                    await sendMessage(senderId, `Found ${babyResponse.babies.length} Babies:\n\n${babyList}`);
+                } else {
+                    await sendMessage(senderId, "✅ No baby records found in the system.");
+                }
+                
+                return; // Stop processing further
+            }
 
 
           // --- Original Placeholder Logic (now runs if not 'babies') ---
-          
+          
           // Example: Save message as a baby name for now
           const babyData = {
             name: incomingText,
