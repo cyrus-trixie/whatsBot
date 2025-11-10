@@ -12,7 +12,7 @@ const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
 // Ensure this is set to your current, running Ngrok URL on Render's side!
 // Example: https://b25fa3b43f55.ngrok-free.app/api
-const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE;
+const LARAVEL_API_BASE ='https://b25fa3b43f55.ngrok-free.app/api';
 
 // WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
