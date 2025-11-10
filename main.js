@@ -68,12 +68,12 @@ async function fetchFromLaravel(endpointPath) {
   try {
     console.log(`📡 Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
 
-    const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}, {
+    const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
       },
-    }`);
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -99,13 +99,13 @@ async function saveBabyToLaravel(babyData) {
   try {
     console.log('🟢 Sending data to Laravel API:, babyData');
 
-    const response = await fetch(`${LARAVEL_API_BASE}/babies, {
+    const response = await fetch(`${LARAVEL_API_BASE}`/babies, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(babyData),
-    }`);
+    });
 
     if (!response.ok) {
       const errorData = await response.text();
