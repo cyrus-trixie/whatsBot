@@ -11,7 +11,7 @@ const WA_TOKEN = process.env.WHATSAPP_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
 // 👇 Replace this with your Laravel local Ngrok/Localtunnel URL
-const LARAVEL_API_BASE = 'https://b25fa3b43f55.ngrok-free.app/api';
+const LARAVEL_API_BASE = ' https://8dad04d42318.ngrok-free.app/api';
 
 // WhatsApp Cloud API base URL
 const API_BASE_URL = 'https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages';
