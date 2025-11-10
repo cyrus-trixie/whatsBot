@@ -11,7 +11,7 @@ const WA_TOKEN = process.env.WHATSAPP_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
 // Laravel API base URL. Using 127.0.0.1:8000 since Laravel is running locally.
-const LARAVEL_API_BASE = "  https://ca96a5e619b8.ngrok-free.app/api"; 
+const LARAVEL_API_BASE = "https://b25fa3b43f55.ngrok-free.app/api"; 
 // const LARAVEL_API_BASE = "https://lazy-crabs-roll.loca.lt/api"; // Your previous loca.lt URL for reference
 
 // WhatsApp API base URL
