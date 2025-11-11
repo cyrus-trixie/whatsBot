@@ -18,22 +18,32 @@ const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE;
 // WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
 
-// --- Menu Constants ---
-const INTRO_MESSAGE = "🇰🇪 Welcome to the IVY Immunization Tracker, built for CHWs.";
-const MAIN_MENU = `
-*--- Main Menu ---*
-Please reply with the *number* of the action you wish to perform:
+// --- AUTHORIZATION CONSTANT ---
+// REPLACE these placeholders with the actual WhatsApp numbers of the CHWs,
+// including the country code but without the leading '+' or spaces.
+const AUTHORIZED_CHW_NUMBERS = [
+    "254712345678", // Example CHW 1 (Kenya) - REMINDER: Use your real numbers here
+    "254798765432", // Example CHW 2 (Kenya) - REMINDER: Use your real numbers here
+];
 
-*1.* 👶 Register New Parent/Guardian
-*2.* 💉 Register New Baby (Child Data)
+// --- Menu Constants (UPDATED) ---
+const INTRO_MESSAGE = "🇰🇪 Jambo! I'm *Immuno*, your dedicated Community Health Worker assistant. I'm here to make tracking immunization schedules simple and quick.";
+const MAIN_MENU = `
+*--- Immuno Main Menu ---*
+Hello, CHW! What would you like to do today?
+
+*1.* 👶 Register New Parent/Guardian (Household)
+*2.* 💉 Register New Baby (Child & Schedule)
 *3.* 🗓️ Create Ad-hoc Appointment
 *4.* ✏️ Modify/Cancel Appointment
 
-*TIP:* Type *CANCEL* at any time to return to this menu.
+*Helpful Tip:* Type *CANCEL* at any time to return to this menu.
 `;
 
 // --- Middleware ---
 app.use(express.json());
+
+// --- Helper Functions (Omitting for brevity, assume they are correct) ---
 
 // --- Helper: Send WhatsApp Message ---
 async function sendMessage(to, text) {
@@ -55,10 +65,10 @@ async function sendMessage(to, text) {
 
 // --- Helper: Fetch Data from Laravel (GET) ---
 async function fetchFromLaravel(endpointPath) {
-    if (!LARAVEL_API_BASE) {
-        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
-        return null;
-    }
+    if (!LARAVEL_API_BASE) {
+        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
+        return null;
+    }
     try {
         console.log(`📡 Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
@@ -77,12 +87,12 @@ async function fetchFromLaravel(endpointPath) {
     }
 }
 
-// --- Helper: Save Baby Data to Laravel (POST - Simplified for Demo) ---
+// --- Helper: Save Data to Laravel (POST - Generalized) ---
 async function saveToLaravel(endpointPath, data) {
-    if (!LARAVEL_API_BASE) {
-        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
-        return { success: false };
-    }
+    if (!LARAVEL_API_BASE) {
+        console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
+        return { success: false };
+    }
   try {
     console.log(`🟢 Sending data to Laravel API: ${endpointPath}`, data);
     const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, { 
@@ -104,16 +114,12 @@ async function saveToLaravel(endpointPath, data) {
     return { success: false, error: err.message };
   }
 }
-
-// --- Health Check Route ---
+// ... (Health Check and Webhook Verification remain the same) ...
 app.get('/', (req, res) => {
   res.status(200).send("Server is running. Webhook listener is active on /whatsapp/webhook");
 });
-
-// --- Webhook Verification (GET) ---
 app.get('/whatsapp/webhook', (req, res) => {
   const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
-
   if (mode === 'subscribe' && token === verifyToken) {
     console.log('✅ Webhook verified with Meta!');
     res.status(200).send(challenge);
@@ -131,58 +137,131 @@ app.post('/whatsapp/webhook', async (req, res) => {
   res.sendStatus(200);
 
   const body = req.body;
+  const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
 
-    // 🛡️ ROBUST GUARDRAILS: Safely check for the required messages structure
-    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
+    if (!messages || messages.length === 0) {
+        return; // Exit cleanly if not a message
+    }
 
-    if (!messages || messages.length === 0) {
-        // This is a status update, test ping, or invalid structure. Exit cleanly.
-        return;
-    }
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    console.log(`\n--- [${timestamp}] Incoming message payload received ---`);
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    console.log(`\n--- [${timestamp}] Incoming message payload received ---`);
+    for (const message of messages) {
+        if (message.type === 'text') {
+            const incomingText = message.text.body.trim();
+            const senderId = message.from;
 
-    for (const message of messages) {
-        if (message.type === 'text') {
-            const incomingText = message.text.body.trim();
-            const senderId = message.from;
-
-            console.log(`💬 Message from ${senderId}: "${incomingText}"`);
-
-            // Get user state or set default 'menu' state
-            const state = userState.get(senderId) || { flow: 'menu', step: 0 };
-            const userInput = incomingText.toLowerCase();
-
-            // --- 0. CANCEL COMMAND ---
-            if (userInput === 'cancel') {
-                if (state.flow !== 'menu') {
-                    userState.delete(senderId);
-                    await sendMessage(senderId, "Operation cancelled. Returning to the main menu.");
-                } else {
-                    await sendMessage(senderId, "You are already at the main menu.");
-                }
-                await sendMessage(senderId, MAIN_MENU);
-                return;
+            // --------------------------------------------------------
+            // 0.5. AUTHORIZATION GATE
+            // --------------------------------------------------------
+            if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
+                console.warn(`❌ UNAUTHORIZED access attempt from ${senderId}.`);
+                await sendMessage(senderId, "Access Denied. This bot is restricted to registered Community Health Workers only.");
+                return; // Stop processing this message
             }
+            // --------------------------------------------------------
+
+            console.log(`💬 Message from ${senderId}: "${incomingText}"`);
+
+            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
+            const userInput = incomingText.toLowerCase();
+
+            // --- 0. CANCEL COMMAND ---
+            if (userInput === 'cancel') {
+                if (state.flow !== 'menu') {
+                    userState.delete(senderId);
+                    await sendMessage(senderId, "Operation cancelled. Heading back to the main menu.");
+                } else {
+                    await sendMessage(senderId, "You are already at the Immuno Main Menu.");
+                }
+                await sendMessage(senderId, MAIN_MENU);
+                return;
+            }
 
             // --------------------------------------------------------
-            // 1. HANDLE USER IN AN ACTIVE FLOW (Sequential Prompts)
+            // 1. HANDLE USER IN THE ACTIVE 'register_parent' FLOW
             // --------------------------------------------------------
-            if (state.flow !== 'menu') {
-                // Placeholder for flow steps (We will build this in the next iteration)
-                userState.set(senderId, { ...state, step: state.step + 1 });
+            if (state.flow === 'register_parent') {
+                let nextStep = state.step + 1;
+                let reply = '';
+                let isConfirmed = false;
 
-                await sendMessage(senderId, 
-                    `You are currently in the *${state.flow.replace('_', ' ')}* flow.\n\n` +
-                    `You are on *Step ${state.step + 1}*. Your last input was: "${incomingText}".\n\n` + 
+                switch (state.step) {
+                    case 1: // Collecting Name
+                        state.data.official_name = incomingText;
+                        reply = "--- New Parent (2/4) ---\nGot it! Please enter the *Parent's WhatsApp Number* (e.g., 2547XXXXXXXX) for future reminders:";
+                        break;
+                    case 2: // Collecting WhatsApp Number
+                        state.data.whatsapp_number = incomingText;
+                        reply = "--- New Parent (3/4) ---\nGreat! What is the *Nearest Clinic* to this household?";
+                        break;
+                    case 3: // Collecting Nearest Clinic
+                        state.data.nearest_clinic = incomingText;
+                        reply = "--- New Parent (4/4) ---\nAnd finally, the **Residence Location** (e.g., estate/village name)?";
+                        break;
+                    case 4: // Collecting Residence Location
+                        state.data.residence_location = incomingText;
+                        // Build Summary for Step 5
+                        reply = `
+*--- 📋 Final Confirmation ---*
+Please review the details for the new parent:
+*Name/ID:* ${state.data.official_name}
+*WhatsApp:* ${state.data.whatsapp_number}
+*Clinic:* ${state.data.nearest_clinic}
+*Residence:* ${state.data.residence_location}
+
+*Is this data CORRECT? Reply Y or N.* (Reply N to restart this registration)
+                        `;
+                        nextStep = 5; // Stay on Step 5 for Y/N input
+                        break;
+                    case 5: // Confirmation (Y/N)
+                        if (userInput === 'y') {
+                            isConfirmed = true;
+                            // --- POST REQUEST TO LARAVEL (Endpoint: /guardians) ---
+                            const result = await saveToLaravel('/guardians', state.data);
+
+                            if (result.success) {
+                                reply = `✅ Wonderful! Parent *${state.data.official_name}* is successfully registered. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
+                            } else {
+                                reply = `❌ Oh dear, there was an error saving the data. Please ensure your Laravel API is running and try again, or type CANCEL.\nAPI Error: ${result.error.slice(0, 50)}...`;
+                            }
+                            
+                            userState.delete(senderId); // End flow
+                        } else if (userInput === 'n') {
+                            // Restart the flow by going back to step 1
+                            reply = "Okay, let's start over! Please enter the *Parent/Guardian's Official Name or ID* again:";
+                            nextStep = 1;
+                            state.data = {}; // Clear collected data
+                            userState.set(senderId, { ...state, step: nextStep, data: state.data });
+                        } else {
+                            // Invalid confirmation input, stay on step 5
+                            reply = "I didn't quite catch that. Please reply *Y* to confirm the details or *N* to restart the registration.";
+                            nextStep = 5;
+                        }
+                        break;
+                }
+
+                if (!isConfirmed || (isConfirmed && !result.success)) {
+                    // Update state and send next prompt (only if we're mid-flow or failed post-confirmation)
+                    userState.set(senderId, { ...state, step: nextStep });
+                    await sendMessage(senderId, reply);
+                } 
+                return; // Stop processing in the active flow
+
+            } else if (state.flow !== 'menu') {
+                 // --- Placeholder for other flows (register_baby, create_appointment, etc.) ---
+                 // This will run if the flow is not 'menu' or 'register_parent'
+                 userState.set(senderId, { ...state, step: state.step + 1 });
+
+                 await sendMessage(senderId, 
+                    `You are currently in the *${state.flow.replace('_', ' ')}* flow. We need to build the next steps! \n\n` +
                     `_Type CANCEL to exit._`);
                 
-                return;
+                 return;
             }
 
             // --------------------------------------------------------
-            // 2. HANDLE MAIN MENU SELECTION (flow: 'menu')
+            // 2. HANDLE MAIN MENU SELECTION (flow: 'menu') - UPDATED STARTER
             // --------------------------------------------------------
 
             if (['1', '2', '3', '4'].includes(userInput)) {
@@ -197,9 +276,9 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 
                 // IMMEDIATE NEXT STEP: Start the first prompt for the selected flow.
                 if (nextFlow === 'register_parent') {
-                    await sendMessage(senderId, "--- New Parent Registration (1/4) ---\nPlease enter the *Parent/Guardian's Official Name or ID*:");
+                    await sendMessage(senderId, "--- New Parent Registration (1/4) ---\nHello! Please enter the *Parent/Guardian's Official Name or ID* to start:");
                 } else {
-                    await sendMessage(senderId, `*You selected Option ${userInput}.* Starting the ${nextFlow.replace('_', ' ')} flow...`);
+                    await sendMessage(senderId, `*Immuno Bot:* Starting the *${nextFlow.replace('_', ' ')}* flow. Please follow the prompts!`);
                 }
                 
             } else if (userInput === 'babies') {
@@ -207,7 +286,8 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 const babyResponse = await fetchFromLaravel('/babies');
                 
                 if (babyResponse && babyResponse.babies && babyResponse.babies.length > 0) {
-                    const babyList = babyResponse.babies.map(baby => {
+                    // ... (list formatting logic remains the same)
+                    const babyList = babyResponse.babies.map(baby => {
                         const dob = baby.date_of_birth ? new Date(baby.date_of_birth).toLocaleDateString('en-KE') : 'Unknown';
                         return `👶 ${baby.first_name} (DOB: ${dob}, Status: ${baby.immunization_status || 'N/A'})`;
                     }).join('\n');
