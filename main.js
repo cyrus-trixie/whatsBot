@@ -24,7 +24,10 @@ const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/mes
 const AUTHORIZED_CHW_NUMBERS = [
     "254712345678", // Example CHW 1 (Kenya)
     "254798765432",
-    "254742918991", // Example CHW 2 (Kenya)
+    "254742918991",
+    "254729054607",
+    "254111786050"
+     // Example CHW 2 (Kenya)
 ];
 
 // --- Menu Constants ---
