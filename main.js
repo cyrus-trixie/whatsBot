@@ -3,6 +3,7 @@ import 'dotenv/config';
 
 // Initialize Express app
 const app = express();
+app.use(express.json()); // Added this line to ensure Express can parse JSON bodies
 
 // --- CONFIGURATION & STATE MANAGEMENT ---
 const userState = new Map();
@@ -40,7 +41,7 @@ Hello, CHW! What would you like to do today?
 *Helpful Tip:* Type *CANCEL* at any time to return to this menu.
 `;
 
-// --- Helper Functions (sendMessage, fetchFromLaravel, saveToLaravel - same as before) ---
+// --- Helper Functions ---
 // --- Helper: Send WhatsApp Message ---
 async function sendMessage(to, text) {
     if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
@@ -87,7 +88,8 @@ async function fetchFromLaravel(endpointPath) {
 async function saveToLaravel(endpointPath, data) {
     if (!LARAVEL_API_BASE) {
         console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
-        return { success: false };
+        // Ensure a string error message is returned
+        return { success: false, error: "LARAVEL_API_BASE environment variable is missing." }; 
     }
     try {
         console.log(`🟢 Sending data to Laravel API: ${endpointPath}`, data);
@@ -98,15 +100,19 @@ async function saveToLaravel(endpointPath, data) {
         });
 
         if (!response.ok) {
-            const errorData = await response.text();
-            console.error("❌ Laravel API error:", errorData);
-            return { success: false, error: errorData };
+            let errorData = await response.text();
+            // Critical fix: Ensure errorData is a string, then trim/slice for logging
+            const logError = errorData.length > 200 ? `${errorData.substring(0, 200)}...` : errorData;
+            console.error("❌ Laravel API error:", logError);
+            // Return the full error data as a string
+            return { success: false, error: errorData }; 
         } else {
             console.log("✅ Data saved successfully in Laravel!");
             return { success: true, data: await response.json() };
         }
     } catch (err) {
         console.error("❌ Error connecting to Laravel:", err.message);
+        // Ensure a string error message is returned
         return { success: false, error: err.message };
     }
 }
@@ -117,6 +123,7 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
     let reply = '';
     let isConfirmed = false;
+    let result = { success: false }; // Initialize result here
 
     switch (state.step) {
         case 1: // Collecting Name
@@ -148,7 +155,7 @@ Please review the details for the new parent:
         case 5: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                const result = await saveToLaravel('/guardians', {
+                result = await saveToLaravel('/guardians', {
                     official_name: state.data.official_name,
                     whatsapp_number: state.data.whatsapp_number,
                     nearest_clinic: state.data.nearest_clinic,
@@ -158,7 +165,10 @@ Please review the details for the new parent:
                 if (result.success) {
                     reply = `✅ Wonderful! Parent *${state.data.official_name}* is successfully registered. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
-                    reply = `❌ Oh dear, there was an error saving the data. Please check the logs and ensure your Laravel API is running and try again, or type CANCEL.\nAPI Error: ${result.error.slice(0, 50)}...`;
+                    // FIX APPLIED: Ensure result.error is a string and use safe slicing
+                    const errorMessage = String(result.error);
+                    const slicedError = errorMessage.slice(0, 100);
+                    reply = `❌ Oh dear, there was an error saving the data. Please check the logs and ensure your Laravel API is running and try again, or type CANCEL.\nAPI Error: ${slicedError}...`;
                 }
                 userState.delete(senderId); // End flow
             } else if (userInput === 'n') {
@@ -184,6 +194,7 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
     let reply = '';
     let isConfirmed = false;
+    let result = { success: false }; // Initialize result here
 
     switch (state.step) {
         case 1: // Collecting Guardian ID
@@ -258,12 +269,15 @@ Please review the details for the new baby:
             if (userInput === 'y') {
                 isConfirmed = true;
                 // --- POST REQUEST TO LARAVEL (Endpoint: /babies) ---
-                const result = await saveToLaravel('/babies', state.data);
+                result = await saveToLaravel('/babies', state.data);
 
                 if (result.success) {
                     reply = `✅ Success! Baby *${state.data.first_name}* is registered and the immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
                 } else {
-                    reply = `❌ Error! The baby registration failed. Check the logs and ensure your Laravel API is running and that Guardian ID ${state.data.guardian_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${result.error.slice(0, 50)}...`;
+                    // FIX APPLIED: Ensure result.error is a string and use safe slicing
+                    const errorMessage = String(result.error);
+                    const slicedError = errorMessage.slice(0, 100);
+                    reply = `❌ Error! The baby registration failed. Check the logs and ensure your Laravel API is running and that Guardian ID ${state.data.guardian_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${slicedError}...`;
                 }
                 
                 userState.delete(senderId); // End flow
@@ -285,33 +299,51 @@ Please review the details for the new baby:
 }
 
 
-// --- Health Check Route (Omitted for brevity) ---
-// ...
+// --- Health Check Route ---
+app.get('/', (req, res) => {
+    res.send({ status: 'Immuno Bot running', api_base: LARAVEL_API_BASE || 'Not Configured' });
+});
 
-// --- Webhook Verification (GET) (Omitted for brevity) ---
-// ...
+// --- Webhook Verification (GET) ---
+app.get('/whatsapp/webhook', (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    if (mode && token) {
+        if (mode === 'subscribe' && token === verifyToken) {
+            console.log('[✅] Webhook verified successfully!');
+            return res.status(200).send(challenge);
+        } else {
+            return res.status(403).send('Forbidden: Verification token mismatch.');
+        }
+    }
+    res.status(400).send('Bad Request: Missing hub.mode or hub.token.');
+});
 
 // -------------------------------------------------------------------------------------
 // --- CORE LOGIC: Handle Incoming WhatsApp Messages (POST) ---
 // -------------------------------------------------------------------------------------
 app.post('/whatsapp/webhook', async (req, res) => {
-  // 1. Always respond immediately
-  res.sendStatus(200);
+    // 1. Always respond immediately
+    res.sendStatus(200);
 
-  const body = req.body;
-  const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
+    const body = req.body;
+    // Check for nested message structure
+    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
 
-    if (!messages || messages.length === 0) {
-        return; // Exit cleanly if not a message
-    }
+    if (!messages || messages.length === 0) {
+        return; // Exit cleanly if not a message
+    }
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    console.log(`\n--- [${timestamp}] Incoming message payload received ---`);
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    console.log(`\n--- [${timestamp}] Incoming message payload received ---`);
 
-    for (const message of messages) {
-        if (message.type === 'text') {
-            const incomingText = message.text.body.trim();
-            const senderId = message.from;
+    for (const message of messages) {
+        if (message.type === 'text') {
+            const incomingText = message.text.body.trim();
+            // Get senderId and strip any non-digit characters to ensure clean matching/storage
+            const senderId = message.from.replace(/\D/g, ''); 
 
             // 0.5. AUTHORIZATION GATE
             if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
@@ -320,13 +352,13 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 return; 
             }
 
-            console.log(`💬 Message from ${senderId}: "${incomingText}"`);
+            console.log(`💬 Message from ${senderId}: "${incomingText}"`);
 
-            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
-            const userInput = incomingText.toLowerCase();
+            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
+            const userInput = incomingText.toLowerCase();
 
-            // --- 0. CANCEL COMMAND ---
-            if (userInput === 'cancel') {
+            // --- 0. CANCEL COMMAND ---
+            if (userInput === 'cancel') {
                 if (state.flow !== 'menu') {
                     userState.delete(senderId);
                     await sendMessage(senderId, "Operation cancelled. Heading back to the main menu.");
@@ -398,9 +430,21 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 await sendMessage(senderId, INTRO_MESSAGE);
                 await sendMessage(senderId, MAIN_MENU);
             }
-        }
-    }
+        }
+    }
 });
 
-// --- Start Server (Omitted for brevity) ---
-// ...
+// --- Start Server ---
+app.listen(port, () => {
+    console.log(`🚀 Server running on port ${port}`);
+    console.log(`🌍 Webhook endpoint: /whatsapp/webhook`);
+
+    if (!WA_TOKEN || !verifyToken || !WA_PHONE_NUMBER_ID) {
+        console.warn('🚨 WARNING: WHATSAPP_TOKEN, VERIFY_TOKEN, or WHATSAPP_PHONE_ID not set. API/Webhook operations will fail.');
+    }
+    if (!LARAVEL_API_BASE) {
+        console.warn('🚨 WARNING: LARAVEL_API_BASE is NOT set. External API calls will result in an error message.');
+    } else {
+        console.log(`✅ LARAVEL_API_BASE is set to: ${LARAVEL_API_BASE}`);
+    }
+});
