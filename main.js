@@ -22,7 +22,7 @@ const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/mes
 // REPLACE these placeholders with the actual WhatsApp numbers of the CHWs,
 // including the country code but without the leading '+' or spaces.
 const AUTHORIZED_CHW_NUMBERS = [
-    "254712345678", // Example CHW 1 (Kenya) - REMINDER: Use your real numbers here
+    "254742918991", // Example CHW 1 (Kenya) - REMINDER: Use your real numbers here
     "254798765432", // Example CHW 2 (Kenya) - REMINDER: Use your real numbers here
 ];
 
