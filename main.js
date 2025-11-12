@@ -302,6 +302,92 @@ Please review the details for the new baby:
 }
 
 
+// --- NEW FLOW HANDLER: Create Ad-hoc Appointment (Option 3) ---
+async function handleCreateAppointment(senderId, state, incomingText, userInput) {
+    let nextStep = state.step + 1;
+    let reply = '';
+    let isConfirmed = false;
+    let result = { success: false };
+
+    switch (state.step) {
+        case 1: // Collecting Baby ID
+            state.data.baby_id = parseInt(incomingText, 10);
+            if (isNaN(state.data.baby_id) || state.data.baby_id <= 0) {
+                reply = "That doesn't look like a valid Baby ID. Please enter the *numeric Baby ID* for the appointment:";
+                nextStep = 1; // Stay on Step 1
+            } else {
+                reply = "--- New Appointment (2/4) ---\nGot the Baby ID. What is the *Date of the Appointment*? (in YYYY-MM-DD format, e.g., 2025-11-20):";
+            }
+            break;
+
+        case 2: // Collecting Appointment Date
+            if (/\d{4}-\d{2}-\d{2}/.test(incomingText)) {
+                state.data.appointment_date = incomingText + "T00:00:00Z";
+                reply = "--- New Appointment (3/4) ---\nDate confirmed. What is the *Purpose* of this ad-hoc appointment? (e.g., 'Make up for missed dose', 'Checkup'):";
+            } else {
+                reply = "Invalid date format. Please enter the *Appointment Date* exactly in YYYY-MM-DD format (e.g., 2025-11-20):";
+                nextStep = 2; // Stay on Step 2
+            }
+            break;
+
+        case 3: // Collecting Purpose/Notes
+            state.data.purpose_notes = incomingText;
+            // The CHW creating the appointment is the senderId (their WhatsApp number)
+            state.data.chw_number = senderId; 
+
+            reply = `
+*--- 📋 Final Appointment Confirmation ---*
+Please review the details for the new appointment:
+*Baby ID:* ${state.data.baby_id}
+*Date:* ${state.data.appointment_date.substring(0, 10)}
+*Purpose:* ${state.data.purpose_notes}
+*CHW (Creator):* ${state.data.chw_number}
+
+*Is this data CORRECT? Reply Y or N.* (Reply N to restart)
+            `;
+            nextStep = 4; // Stay on Step 4 for Y/N input
+            break;
+
+        case 4: // Confirmation (Y/N)
+            if (userInput === 'y') {
+                isConfirmed = true;
+                // --- POST REQUEST TO LARAVEL (Endpoint: /appointments) ---
+                const payload = {
+                    baby_id: state.data.baby_id,
+                    appointment_date: state.data.appointment_date,
+                    appointment_type: 'Ad-hoc', // Set the type explicitly
+                    notes: state.data.purpose_notes,
+                    chw_number: state.data.chw_number,
+                };
+                
+                result = await saveToLaravel('/appointments', payload);
+
+                if (result.success) {
+                    reply = `✅ Success! An Ad-hoc Appointment for Baby ID ${state.data.baby_id} on ${state.data.appointment_date.substring(0, 10)} is created. The parent will be notified.\n\n${MAIN_MENU}`;
+                } else {
+                    const errorMessage = String(result.error);
+                    const slicedError = errorMessage.slice(0, 100);
+                    reply = `❌ Error! Appointment creation failed. Check the logs and ensure your Laravel API is running and that Baby ID ${state.data.baby_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${slicedError}...`;
+                }
+                
+                userState.delete(senderId); // End flow
+            } else if (userInput === 'n') {
+                reply = "Okay, let's restart the Ad-hoc Appointment process. Please enter the *Baby ID* again:";
+                nextStep = 1;
+                state.data = {}; // Clear collected data
+            } else {
+                reply = "I didn't quite catch that. Please reply *Y* to confirm the details or *N* to restart the process.";
+                nextStep = 4;
+            }
+            break;
+    }
+
+    if (!isConfirmed || (isConfirmed && !result.success)) {
+        userState.set(senderId, { ...state, step: nextStep, data: state.data });
+        await sendMessage(senderId, reply);
+    }
+}
+
 // --- Health Check Route ---
 app.get('/', (req, res) => {
     res.send({ status: 'Immuno Bot running', api_base: LARAVEL_API_BASE || 'Not Configured' });
@@ -386,7 +472,13 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 return;
             }
 
-            // ... (other flows will go here: create_appointment, modify_appointment) ...
+            // ADDED: New flow handler for Option 3
+            if (state.flow === 'create_appointment') {
+                await handleCreateAppointment(senderId, state, incomingText, userInput);
+                return;
+            }
+
+            // ... (other flows will go here: modify_appointment) ...
 
 
             // --------------------------------------------------------
@@ -403,8 +495,11 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 } else if (userInput === '2') {
                     nextFlow = 'register_baby';
                     firstPrompt = "--- New Baby Registration (1/7) ---\nTo link the baby, please enter the *Guardian ID* (the number from their registration):";
-                } else {
-                    nextFlow = userInput === '3' ? 'create_appointment' : 'modify_appointment';
+                } else if (userInput === '3') { // Implemented Option 3
+                    nextFlow = 'create_appointment';
+                    firstPrompt = "--- New Ad-hoc Appointment (1/4) ---\nTo schedule an appointment, please enter the *Baby ID* for the child:";
+                } else { // Option 4
+                    nextFlow = 'modify_appointment';
                     firstPrompt = `*Immuno Bot:* Starting the *${nextFlow.replace('_', ' ')}* flow. This flow is still under construction! Please use CANCEL.`;
                 }
                 
