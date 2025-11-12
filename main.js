@@ -77,7 +77,7 @@ async function fetchFromLaravel(endpointPath) {
         });
         if (!response.ok) {
             const errorText = await response.text();
-            console.error(`❌ Laravel GET API error for ${endpointPath}: ${response.status} - ${errorText}`);
+            console.error(`❌ Laravel GET API error [Status: ${response.status}] for ${endpointPath}: ${errorText}`); // Improved error logging
             return null;
         }
         return await response.json();
@@ -87,35 +87,38 @@ async function fetchFromLaravel(endpointPath) {
     }
 }
 
-// --- Helper: Save Data to Laravel (POST) ---
-async function saveToLaravel(endpointPath, data) {
+// --- Helper: Save Data to Laravel (POST/PUT/DELETE) ---
+async function saveToLaravel(endpointPath, data, method = "POST") {
     if (!LARAVEL_API_BASE) {
         console.error("❌ LARAVEL_API_BASE is not configured. Cannot connect to API.");
-        // Ensure a string error message is returned
         return { success: false, error: "LARAVEL_API_BASE environment variable is missing." }; 
     }
     try {
-        console.log(`🟢 Sending data to Laravel API: ${endpointPath}`, data);
+        console.log(`🟢 Sending data to Laravel API (${method}): ${endpointPath}`, data);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, { 
-            method: "POST",
+            method: method, // Use the provided method
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
+            body: method === "GET" || method === "DELETE" ? null : JSON.stringify(data),
         });
 
         if (!response.ok) {
             let errorData = await response.text();
             // Critical fix: Ensure errorData is a string, then trim/slice for logging
             const logError = errorData.length > 200 ? `${errorData.substring(0, 200)}...` : errorData;
-            console.error("❌ Laravel API error:", logError);
+            console.error(`❌ Laravel API error [Status: ${response.status}]:`, logError); // Improved error logging
             // Return the full error data as a string
             return { success: false, error: errorData }; 
         } else {
-            console.log("✅ Data saved successfully in Laravel!");
-            return { success: true, data: await response.json() };
+            console.log(`✅ Data processed successfully in Laravel via ${method}!`);
+            // Check for empty body on successful delete/update (204 No Content)
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                return { success: true, data: await response.json() };
+            }
+            return { success: true, data: { message: "Operation successful, no content returned." } };
         }
     } catch (err) {
         console.error("❌ Error connecting to Laravel:", err.message);
-        // Ensure a string error message is returned
         return { success: false, error: err.message };
     }
 }
@@ -126,7 +129,7 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
     let reply = '';
     let isConfirmed = false;
-    let result = { success: false }; // Initialize result here
+    let result = { success: false }; 
 
     switch (state.step) {
         case 1: // Collecting Name
@@ -134,6 +137,12 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
             reply = "--- New Parent (2/4) ---\nGot it! Please enter the *Parent's WhatsApp Number* (e.g., 2547XXXXXXXX) for future reminders:";
             break;
         case 2: // Collecting WhatsApp Number
+            // Basic number format validation (Kenya mobile number pattern)
+            if (!/^(?:254|\+254|0)?(7|1)\d{8}$/.test(incomingText)) {
+                reply = "Invalid phone number format. Please ensure it starts with 2547 or 2541 (e.g., 2547XXXXXXXX):";
+                nextStep = 2; // Stay on step 2
+                break;
+            }
             state.data.whatsapp_number = incomingText;
             reply = "--- New Parent (3/4) ---\nGreat! What is the *Nearest Clinic* to this household?";
             break;
@@ -158,7 +167,8 @@ Please review the details for the new parent:
         case 5: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                result = await saveToLaravel('/guardians', {
+                // --- CRITICAL FIX: Endpoint changed to /users ---
+                result = await saveToLaravel('/users', {
                     official_name: state.data.official_name,
                     whatsapp_number: state.data.whatsapp_number,
                     nearest_clinic: state.data.nearest_clinic,
@@ -168,7 +178,6 @@ Please review the details for the new parent:
                 if (result.success) {
                     reply = `✅ Wonderful! Parent *${state.data.official_name}* is successfully registered. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
-                    // FIX APPLIED: Ensure result.error is a string and use safe slicing
                     const errorMessage = String(result.error);
                     const slicedError = errorMessage.slice(0, 100);
                     reply = `❌ Oh dear, there was an error saving the data. Please check the logs and ensure your Laravel API is running and try again, or type CANCEL.\nAPI Error: ${slicedError}...`;
@@ -197,8 +206,12 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
     let reply = '';
     let isConfirmed = false;
-    let result = { success: false }; // Initialize result here
+    let result = { success: false }; 
 
+    // ... (This function remains as implemented in the previous step)
+    // The implementation details are omitted here for brevity but are included in the final code block.
+    // ...
+    
     switch (state.step) {
         case 1: // Collecting Guardian ID
             state.data.guardian_id = parseInt(incomingText, 10);
@@ -236,9 +249,7 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
         case 5: // Collecting Date of Birth
             // Simple date validation: checks if it matches YYYY-MM-DD
             if (/\d{4}-\d{2}-\d{2}/.test(incomingText)) {
-                // IMPORTANT: The API needs an ISO-8601 format date string, which YYYY-MM-DD is close to.
-                // We will assume the API can handle this or a simple date-time string.
-                state.data.date_of_birth = incomingText + "T00:00:00Z"; // Append time part to meet API format
+                state.data.date_of_birth = incomingText + "T00:00:00Z"; 
                 reply = "--- New Baby (6/7) ---\nDOB confirmed. What is the baby's *Nationality*? (e.g., Kenyan):";
             } else {
                 reply = "Invalid date format. Please enter the *Date of Birth* exactly in YYYY-MM-DD format (e.g., 2025-01-20):";
@@ -277,7 +288,6 @@ Please review the details for the new baby:
                 if (result.success) {
                     reply = `✅ Success! Baby *${state.data.first_name}* is registered and the immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
                 } else {
-                    // FIX APPLIED: Ensure result.error is a string and use safe slicing
                     const errorMessage = String(result.error);
                     const slicedError = errorMessage.slice(0, 100);
                     reply = `❌ Error! The baby registration failed. Check the logs and ensure your Laravel API is running and that Guardian ID ${state.data.guardian_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${slicedError}...`;
@@ -302,7 +312,7 @@ Please review the details for the new baby:
 }
 
 
-// --- NEW FLOW HANDLER: Create Ad-hoc Appointment (Option 3) ---
+// --- FLOW HANDLER: Create Ad-hoc Appointment (Option 3) ---
 async function handleCreateAppointment(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
     let reply = '';
@@ -314,7 +324,7 @@ async function handleCreateAppointment(senderId, state, incomingText, userInput)
             state.data.baby_id = parseInt(incomingText, 10);
             if (isNaN(state.data.baby_id) || state.data.baby_id <= 0) {
                 reply = "That doesn't look like a valid Baby ID. Please enter the *numeric Baby ID* for the appointment:";
-                nextStep = 1; // Stay on Step 1
+                nextStep = 1; 
             } else {
                 reply = "--- New Appointment (2/4) ---\nGot the Baby ID. What is the *Date of the Appointment*? (in YYYY-MM-DD format, e.g., 2025-11-20):";
             }
@@ -326,14 +336,13 @@ async function handleCreateAppointment(senderId, state, incomingText, userInput)
                 reply = "--- New Appointment (3/4) ---\nDate confirmed. What is the *Purpose* of this ad-hoc appointment? (e.g., 'Make up for missed dose', 'Checkup'):";
             } else {
                 reply = "Invalid date format. Please enter the *Appointment Date* exactly in YYYY-MM-DD format (e.g., 2025-11-20):";
-                nextStep = 2; // Stay on Step 2
+                nextStep = 2; 
             }
             break;
 
         case 3: // Collecting Purpose/Notes
             state.data.purpose_notes = incomingText;
-            // The CHW creating the appointment is the senderId (their WhatsApp number)
-            state.data.chw_number = senderId; 
+            state.data.chw_number = senderId; // The CHW creating the appointment is the senderId
 
             reply = `
 *--- 📋 Final Appointment Confirmation ---*
@@ -355,7 +364,7 @@ Please review the details for the new appointment:
                 const payload = {
                     baby_id: state.data.baby_id,
                     appointment_date: state.data.appointment_date,
-                    appointment_type: 'Ad-hoc', // Set the type explicitly
+                    appointment_type: 'Ad-hoc', 
                     notes: state.data.purpose_notes,
                     chw_number: state.data.chw_number,
                 };
@@ -367,7 +376,7 @@ Please review the details for the new appointment:
                 } else {
                     const errorMessage = String(result.error);
                     const slicedError = errorMessage.slice(0, 100);
-                    reply = `❌ Error! Appointment creation failed. Check the logs and ensure your Laravel API is running and that Baby ID ${state.data.baby_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${slicedError}...`;
+                    reply = `❌ Error! Appointment creation failed. Check the logs and ensure your Laravel API is running. Type CANCEL.\nAPI Error: ${slicedError}...`;
                 }
                 
                 userState.delete(senderId); // End flow
@@ -387,6 +396,130 @@ Please review the details for the new appointment:
         await sendMessage(senderId, reply);
     }
 }
+
+// --- NEW FLOW HANDLER: Modify/Cancel Appointment (Option 4) ---
+async function handleModifyCancelAppointment(senderId, state, incomingText, userInput) {
+    let reply = '';
+    
+    switch (state.step) {
+        case 1: // Collecting Baby ID
+            state.data.baby_id = parseInt(incomingText, 10);
+            if (isNaN(state.data.baby_id) || state.data.baby_id <= 0) {
+                reply = "That doesn't look like a valid Baby ID. Please enter the *numeric Baby ID* whose appointments you want to manage:";
+                break; // Stay on step 1
+            }
+            
+            // --- Step 2: Fetch Appointments (Placeholder Logic) ---
+            const appointmentResponse = await fetchFromLaravel(`/appointments/${state.data.baby_id}`);
+            
+            if (!appointmentResponse || !appointmentResponse.appointments || appointmentResponse.appointments.length === 0) {
+                reply = `⚠️ No active appointments found for Baby ID ${state.data.baby_id}. Type CANCEL to return to the menu.`;
+                userState.delete(senderId); // End flow
+            } else {
+                // Formatting the list of appointments for the CHW to choose from
+                const appointmentList = appointmentResponse.appointments.map((appt, index) => 
+                    `*${index + 1}.* Date: ${new Date(appt.appointment_date).toLocaleDateString()} | Type: ${appt.appointment_type} | ID: ${appt.id}`
+                ).join('\n');
+
+                reply = `
+*--- Modify/Cancel Appointment ---*
+Found the following active appointments for Baby ID ${state.data.baby_id}:
+${appointmentList}
+
+Reply with the *NUMBER* of the appointment you wish to modify or cancel.
+                `;
+                userState.set(senderId, { 
+                    ...state, 
+                    step: 2, 
+                    data: { ...state.data, appointments: appointmentResponse.appointments } 
+                });
+            }
+            break;
+        
+        case 2: // Selecting Appointment to Modify/Cancel
+            const choiceIndex = parseInt(incomingText, 10) - 1;
+            const selectedAppointment = state.data.appointments?.[choiceIndex];
+
+            if (selectedAppointment) {
+                state.data.appointment_id = selectedAppointment.id;
+
+                reply = `
+*Selected Appointment ID: ${selectedAppointment.id}* on ${new Date(selectedAppointment.appointment_date).toLocaleDateString()}.
+What would you like to do?
+*1.* Modify Date/Notes
+*2.* Cancel Appointment
+                `;
+                userState.set(senderId, { ...state, step: 3, data: state.data });
+            } else {
+                reply = "Invalid selection. Please reply with the *NUMBER* (1, 2, 3...) of the appointment you want to manage.";
+                userState.set(senderId, { ...state, step: 2 }); // Stay on step 2
+            }
+            break;
+
+        case 3: // Action: Modify or Cancel
+            if (userInput === '1') {
+                reply = "You chose to **Modify**. Please enter the *NEW Date* (YYYY-MM-DD) and a brief *Note* (e.g., 2025-12-15, Parent requested later date):";
+                userState.set(senderId, { ...state, step: 4 });
+            } else if (userInput === '2') {
+                reply = `Are you sure you want to **CANCEL** Appointment ID ${state.data.appointment_id}? Reply *YES* to confirm cancellation.`;
+                userState.set(senderId, { ...state, step: 5 });
+            } else {
+                reply = "Invalid choice. Reply *1* to Modify or *2* to Cancel:";
+                userState.set(senderId, { ...state, step: 3 });
+            }
+            break;
+
+        case 4: // Execute Modify (PUT)
+            // Expecting format: YYYY-MM-DD, Note
+            const parts = incomingText.split(',').map(p => p.trim());
+            const newDate = parts[0];
+            const newNote = parts.slice(1).join(', ') || "Modified by CHW via WhatsApp.";
+
+            if (/\d{4}-\d{2}-\d{2}/.test(newDate)) {
+                // --- PUT REQUEST TO LARAVEL (Endpoint: /appointments/{id}) ---
+                result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, { 
+                    appointment_date: newDate + "T00:00:00Z",
+                    notes: newNote,
+                    chw_number: senderId // Audit who modified it
+                }, "PUT");
+
+                if (result.success) {
+                    reply = `✅ Success! Appointment ID ${state.data.appointment_id} modified to ${newDate} with note: "${newNote}".\n\n${MAIN_MENU}`;
+                } else {
+                    reply = `❌ Error modifying appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 100)}...`;
+                }
+                userState.delete(senderId);
+            } else {
+                reply = "Invalid format. Please enter the *NEW Date* (YYYY-MM-DD) and a brief *Note*, separated by a comma. (e.g., 2025-12-15, New time confirmed):";
+                userState.set(senderId, { ...state, step: 4 });
+            }
+            break;
+        
+        case 5: // Execute Cancel (DELETE)
+            if (userInput === 'yes') {
+                // --- DELETE REQUEST TO LARAVEL (Endpoint: /appointments/{id}) ---
+                // Note: DELETE requests often don't need a body, but we pass null to be safe.
+                result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, null, "DELETE"); 
+
+                if (result.success) {
+                    reply = `✅ Success! Appointment ID ${state.data.appointment_id} has been **CANCELLED**.\n\n${MAIN_MENU}`;
+                } else {
+                    reply = `❌ Error cancelling appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 100)}...`;
+                }
+                userState.delete(senderId);
+            } else {
+                reply = "Cancellation not confirmed. Returning to the action menu. Reply *1* to Modify or *2* to Cancel:";
+                userState.set(senderId, { ...state, step: 3 });
+            }
+            break;
+    }
+
+    // Only send reply if the flow has not ended (userState.delete)
+    if (userState.has(senderId)) {
+        await sendMessage(senderId, reply);
+    }
+}
+
 
 // --- Health Check Route ---
 app.get('/', (req, res) => {
@@ -472,13 +605,16 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 return;
             }
 
-            // ADDED: New flow handler for Option 3
             if (state.flow === 'create_appointment') {
                 await handleCreateAppointment(senderId, state, incomingText, userInput);
                 return;
             }
 
-            // ... (other flows will go here: modify_appointment) ...
+            // ADDED: New flow handler for Option 4
+            if (state.flow === 'modify_appointment') {
+                await handleModifyCancelAppointment(senderId, state, incomingText, userInput);
+                return;
+            }
 
 
             // --------------------------------------------------------
@@ -495,12 +631,12 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 } else if (userInput === '2') {
                     nextFlow = 'register_baby';
                     firstPrompt = "--- New Baby Registration (1/7) ---\nTo link the baby, please enter the *Guardian ID* (the number from their registration):";
-                } else if (userInput === '3') { // Implemented Option 3
+                } else if (userInput === '3') { 
                     nextFlow = 'create_appointment';
                     firstPrompt = "--- New Ad-hoc Appointment (1/4) ---\nTo schedule an appointment, please enter the *Baby ID* for the child:";
                 } else { // Option 4
                     nextFlow = 'modify_appointment';
-                    firstPrompt = `*Immuno Bot:* Starting the *${nextFlow.replace('_', ' ')}* flow. This flow is still under construction! Please use CANCEL.`;
+                    firstPrompt = "--- Modify/Cancel Appointment (1/5) ---\nPlease enter the *Baby ID* for the child whose appointments you want to manage:";
                 }
                 
                 // Set the new state to start the flow (Step 1)
