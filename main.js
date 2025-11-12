@@ -695,5 +695,6 @@ app.listen(port, () => {
         console.warn('WARNING: LARAVEL_API_BASE is NOT set. External API calls will result in an error message.');
     } else {
         console.log(`LARAVEL_API_BASE is set to: ${LARAVEL_API_BASE}`);
+        console.log('Ready to connect to Laravel API.');
     }
 });
