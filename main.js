@@ -167,16 +167,23 @@ Please review the details for the new parent:
         case 5: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                // --- CRITICAL FIX: Endpoint changed to /users ---
-                result = await saveToLaravel('/users', {
-                    official_name: state.data.official_name,
-                    whatsapp_number: state.data.whatsapp_number,
+                
+                // --- CRITICAL FIX: Endpoint changed to /register and keys adjusted ---
+                const registerPayload = {
+                    // Use WhatsApp number as the main login identifier
+                    email_or_phone_number: state.data.whatsapp_number, 
+                    // Use the name/ID as the password (as per API docs) for registration
+                    password_or_national_id: state.data.official_name, 
+                    // Laravel will handle storing these in a related profile/user table
+                    official_name: state.data.official_name, 
                     nearest_clinic: state.data.nearest_clinic,
                     residence_location: state.data.residence_location,
-                });
+                };
+                
+                result = await saveToLaravel('/register', registerPayload);
 
                 if (result.success) {
-                    reply = `✅ Wonderful! Parent *${state.data.official_name}* is successfully registered. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
+                    reply = `✅ Wonderful! Parent *${state.data.official_name}* is successfully registered via the API. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
                     const errorMessage = String(result.error);
                     const slicedError = errorMessage.slice(0, 100);
@@ -208,10 +215,6 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
     let isConfirmed = false;
     let result = { success: false }; 
 
-    // ... (This function remains as implemented in the previous step)
-    // The implementation details are omitted here for brevity but are included in the final code block.
-    // ...
-    
     switch (state.step) {
         case 1: // Collecting Guardian ID
             state.data.guardian_id = parseInt(incomingText, 10);
