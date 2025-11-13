@@ -6,6 +6,7 @@ const app = express();
 app.use(express.json());
 
 // --- CONFIGURATION & STATE MANAGEMENT ---
+// Stores the conversation state for each user (senderId -> { step, flow, data })
 const userState = new Map();
 
 // Environment Variables (Ensure these are set on Render)
@@ -14,7 +15,7 @@ const verifyToken = process.env.VERIFY_TOKEN;
 const WA_TOKEN = process.env.WHATSAPP_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
-// NEW: API Base URL and Static Token Variable
+// API Base URL and Static Token Variable
 const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE; 
 const LARAVEL_API_TOKEN = process.env.LARAVEL_API_TOKEN;
 
@@ -49,7 +50,6 @@ Helpful Tip: Type CANCEL at any time to return to this menu.
 // --- Helper Functions ---
 // --- Helper: Send WhatsApp Message ---
 async function sendMessage(to, text) {
-    // FIX for (#100) error: Ensure 'text' is not null, undefined, or empty.
     if (!text || text.trim() === '') {
         console.error("Attempted to send an empty message. Skipping.");
         return;
@@ -72,20 +72,17 @@ async function sendMessage(to, text) {
 }
 
 // --- Helper: Get Base Headers for Laravel API ---
-function getLaravelApiHeaders(method) {
+function getLaravelApiHeaders(endpointPath) {
     const headers = {
         'Content-Type': 'application/json',
-        // --- IMPROVEMENT 1: ADD ACCEPT HEADER ---
         'Accept': 'application/json' 
     };
-    // Add Authorization header for all protected routes (all but /register)
+    // Add Authorization header unless we are hitting an unprotected route like /register
+    // NOTE: If your /register is protected, remove the check below.
     if (LARAVEL_API_TOKEN) {
         headers['Authorization'] = `Bearer ${LARAVEL_API_TOKEN}`;
-    } else {
-        // Log a warning if the token is missing and we're not hitting /register
-        if (!method.toLowerCase().includes('register')) {
-            console.warn("LARAVEL_API_TOKEN is missing. Protected routes will likely fail with 401.");
-        }
+    } else if (!endpointPath.toLowerCase().includes('register')) {
+         console.warn("LARAVEL_API_TOKEN is missing. Protected routes will likely fail with 401.");
     }
     return headers;
 }
@@ -97,14 +94,13 @@ async function fetchFromLaravel(endpointPath) {
         console.error("LARAVEL_API_BASE is not configured. Cannot connect to API.");
         return null;
     }
-    // Determine which routes need the token. The /register route is typically unprotected.
     const headers = getLaravelApiHeaders(endpointPath);
 
     try {
         console.log(`Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
             method: 'GET',
-            headers: headers, // <<< USING NEW HEADERS
+            headers: headers,
         });
         if (!response.ok) {
             const errorText = await response.text();
@@ -125,24 +121,21 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
         return { success: false, error: "LARAVEL_API_BASE environment variable is missing." }; 
     }
     
-    // Determine which routes need the token. The /register route is typically unprotected.
     const headers = getLaravelApiHeaders(endpointPath);
     
     try {
         console.log(`Sending data to Laravel API (${method}): ${endpointPath}`, data);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, { 
-            method: method, // Use the provided method
-            headers: headers, // <<< USING NEW HEADERS
+            method: method,
+            headers: headers,
             body: method === "GET" || method === "DELETE" ? null : JSON.stringify(data),
         });
 
         if (!response.ok) {
             let errorData = await response.text();
-            // Return the full error data as a string
             return { success: false, error: errorData }; 
         } else {
             console.log(`Data processed successfully in Laravel via ${method}!`);
-            // Check for empty body on successful delete/update (204 No Content)
             const contentType = response.headers.get("content-type");
             if (contentType && contentType.includes("application/json")) {
                 return { success: true, data: await response.json() };
@@ -153,6 +146,14 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
         console.error("Error connecting to Laravel:", err.message);
         return { success: false, error: err.message };
     }
+}
+
+// --- Helper: Get Guardian Database ID using National ID (REQUIRED for Option 2) ---
+async function getGuardianIdByNationalId(nationalId) {
+    // ⚠️ IMPORTANT: You MUST implement this endpoint in Laravel: /api/guardians/national_id/{nationalId}
+    const apiResponse = await fetchFromLaravel(`/api/guardians/national_id/${nationalId}`);
+    // Assuming the API returns a response like: { id: 123, ... } or null if not found
+    return apiResponse?.id || null; 
 }
 
 
@@ -172,47 +173,57 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
         case 1: // Collecting Name
             state.data.official_name = incomingText;
             
-            // 🆕 NEW STEP: Collect Gender
-            reply = "--- New Parent (2/5) ---\nGot it! Is the Parent/Guardian Male or Female? (Reply with M or F):";
+            // ⭐️ NEW STEP: Collect National ID
+            reply = "--- New Parent (2/6) ---\nThank you! Please enter the Parent/Guardian's **National ID Number** (e.g., 12345678):";
             break;
             
-        case 2: // 🆕 NEW STEP: Collecting Gender (Fixes Integrity Constraint Violation)
+        case 2: // 🆕 NEW STEP: Collecting National ID
+            const nationalId = parseInt(incomingText, 10);
+            if (isNaN(nationalId) || nationalId <= 0 || incomingText.length < 5) {
+                reply = "Invalid ID. Please enter the **National ID Number** (must be numeric and at least 5 digits):";
+                nextStep = 2; // Stay on step 2
+                break;
+            }
+            state.data.national_id = nationalId; // Store the ID
+            
+            reply = "--- New Parent (3/6) ---\nGot it! Is the Parent/Guardian Male or Female? (Reply with M or F):";
+            break;
+
+        case 3: // Collecting Gender (Shifted from step 2)
             if (userInput === 'm' || userInput === 'male') {
                 state.data.gender = "Male";
             } else if (userInput === 'f' || userInput === 'female') {
                 state.data.gender = "Female";
             } else {
                 reply = "Invalid input. Please reply with M for Male or F for Female:";
-                nextStep = 2; // Stay on step 2
-                break;
-            }
-            // Move to the next question
-            reply = "--- New Parent (3/5) ---\nGreat! Please enter the Parent's WhatsApp Number (e.g., 2547XXXXXXXX) for future reminders:";
-            break;
-
-        case 3: // Collecting WhatsApp Number (Previously step 2)
-            // Basic number format validation (Kenya mobile number pattern)
-            if (!/^(?:254|\+254|0)?(7|1)\d{8}$/.test(incomingText)) {
-                reply = "Invalid phone number format. Please ensure it starts with 2547 or 2541 (e.g., 2547XXXXXXXX):";
                 nextStep = 3; // Stay on step 3
                 break;
             }
-            // Clean number to 254 format for API consistency
+            reply = "--- New Parent (4/6) ---\nGreat! Please enter the Parent's WhatsApp Number (e.g., 2547XXXXXXXX) for future reminders:";
+            break;
+
+        case 4: // Collecting WhatsApp Number (Shifted from step 3)
+            if (!/^(?:254|\+254|0)?(7|1)\d{8}$/.test(incomingText)) {
+                reply = "Invalid phone number format. Please ensure it starts with 2547 or 2541 (e.g., 2547XXXXXXXX):";
+                nextStep = 4; // Stay on step 4
+                break;
+            }
             state.data.whatsapp_number = incomingText.replace(/^(0|\+)/, '254'); 
-            reply = "--- New Parent (4/5) ---\nGreat! What is the Nearest Clinic to this household?";
+            reply = "--- New Parent (5/6) ---\nGreat! What is the Nearest Clinic to this household?";
             break;
             
-        case 4: // Collecting Nearest Clinic (Previously step 3)
+        case 5: // Collecting Nearest Clinic (Shifted from step 4)
             state.data.nearest_clinic = incomingText;
-            reply = "--- New Parent (5/5) ---\nAnd finally, the **Residence Location** (e.g., estate/village name)?";
+            reply = "--- New Parent (6/6) ---\nAnd finally, the **Residence Location** (e.g., estate/village name)?";
             break;
             
-        case 5: // Collecting Residence Location (Previously step 4)
+        case 6: // Collecting Residence Location (Shifted from step 5)
             state.data.residence_location = incomingText;
             reply = `
 --- Final Confirmation ---
 Please review the details for the new parent:
-Name/ID: ${state.data.official_name}
+Name: ${state.data.official_name}
+ID: ${state.data.national_id}
 Gender: ${state.data.gender}
 WhatsApp: ${state.data.whatsapp_number}
 Clinic: ${state.data.nearest_clinic}
@@ -220,71 +231,60 @@ Residence: ${state.data.residence_location}
 
 Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
             `;
-            nextStep = 6; // Moved to Step 6 for Y/N input
+            nextStep = 7; // Move to Step 7 for Y/N input
             break;
             
-        case 6: // Confirmation (Y/N) (Previously step 5)
+        case 7: // Confirmation (Y/N) (Shifted from step 6)
             if (userInput === 'y') {
                 isConfirmed = true;
                 
-                // 🔑 CRITICAL FIX: Use a placeholder password that meets the 8-character minimum.
                 const TEMP_PASSWORD = 'ImmunoBotPassword123';
                 
-                // The full payload with placeholder/default values to satisfy all required API fields
+                // The full payload with collected/default values to satisfy all required API fields
                 const registerPayload = {
                     first_name: firstName,
                     last_name: lastName,
-                    // Use the phone number to create a unique placeholder email
                     email: `${state.data.whatsapp_number}@immunobot.com`, 
                     password: TEMP_PASSWORD, 
                     phone_number: state.data.whatsapp_number,
-                    
-                    // ✅ FIX 1: Use the collected gender to satisfy the CHECK constraint
                     gender: state.data.gender, 
-                    
-                    role: "guardian", // CRITICAL: Sets the user role for the Parent
-                    nationality: "Kenyan", // Placeholder
-                    national_id: 0, // Placeholder
-                    date_of_birth: "2000-01-01T00:00:00Z", // Placeholder
+                    role: "guardian", 
+                    nationality: "Kenyan", 
+                    national_id: state.data.national_id, // ✅ USING COLLECTED ID
+                    date_of_birth: "2000-01-01T00:00:00Z", 
                     address: `${state.data.nearest_clinic}, ${state.data.residence_location}`, 
-                    // ✅ FIX 2: Added a valid placeholder value for marital_status to pass the SQL CHECK constraint
-                    marital_status: "Single", // Placeholder. Use a valid enum value from your DB.
-                    next_of_kin: state.data.official_name, // Use self as placeholder
-                    next_of_kin_contact: state.data.whatsapp_number, // Use self-contact as placeholder
+                    marital_status: "Single", 
+                    next_of_kin: state.data.official_name, 
+                    next_of_kin_contact: state.data.whatsapp_number, 
                     no_of_children: 0, 
-                    password_confirmation: TEMP_PASSWORD // ⬅️ MUST MATCH
+                    password_confirmation: TEMP_PASSWORD
                 };
                 
                 result = await saveToLaravel('/api/register', registerPayload);
 
                 if (result.success) {
-                    // 🛠️ FIX 3: Set reply here before deleting state to prevent (#100)
-                    reply = `Success! Parent ${state.data.official_name} is successfully registered via the API. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
+                    reply = `Success! Parent ${state.data.official_name} (ID: ${state.data.national_id}) is successfully registered. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
-                    // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
                     try {
                         const errorData = JSON.parse(result.error);
                         if (errorData.errors) {
-                            // Format Laravel validation errors for the user
                             const errorMessages = Object.values(errorData.errors).flat().join('\n');
                             reply = `⚠️ Registration failed! Please correct the following API errors:\n${errorMessages}\n\nType CANCEL to return to the menu.`;
                         } else {
-                            // Generic API error (e.g., 500, unhandled 404/401)
                             reply = `Error saving data. Check the logs for details. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
                         }
                     } catch (e) {
-                        // If API error response is not JSON (e.g., HTML 404 page)
                         reply = `Error saving data. Could not process API response. Check the logs for a non-JSON error. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
                     }
                 }
-                userState.delete(senderId); // End flow (must be *after* setting 'reply')
+                userState.delete(senderId); // End flow
             } else if (userInput === 'n') {
                 reply = "Okay, let's start over! Please enter the Parent/Guardian's Official Name or ID again:";
                 nextStep = 1;
                 state.data = {}; // Clear collected data
             } else {
                 reply = "I didn't quite catch that. Please reply Y to confirm the details or N to restart the registration.";
-                nextStep = 6;
+                nextStep = 7;
             }
             break;
     }
@@ -293,7 +293,6 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
         userState.set(senderId, { ...state, step: nextStep });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply); 
     }
 }
@@ -307,14 +306,27 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
     let result = { success: false }; 
 
     switch (state.step) {
-        case 1: // Collecting Guardian ID
-            state.data.guardian_id = parseInt(incomingText, 10);
-            if (isNaN(state.data.guardian_id) || state.data.guardian_id <= 0) {
-                reply = "That doesn't look like a valid Guardian ID number. Please enter the *numeric Guardian ID* (e.g., 1, 25, etc.):";
+        case 1: // Collecting Parent's National ID
+            const nationalId = parseInt(incomingText, 10);
+            if (isNaN(nationalId) || nationalId <= 0 || incomingText.length < 5) {
+                reply = "That doesn't look like a valid Parent's National ID. Please enter the *numeric National ID* (e.g., 12345678):";
                 nextStep = 1; // Stay on Step 1
-            } else {
-                reply = "--- New Baby (2/7) ---\nThank you! Please enter the baby's First Name (or official ID name):";
+                break;
             }
+            
+            // ⭐️ CRITICAL: Check if the National ID exists and get the database ID
+            const guardianDbId = await getGuardianIdByNationalId(nationalId);
+            
+            if (!guardianDbId) {
+                reply = `Error: Parent with National ID ${nationalId} not found. Please register the parent first (Option 1). Type CANCEL to return to the menu.`;
+                userState.delete(senderId); // End the flow
+                return;
+            }
+            
+            state.data.guardian_id = guardianDbId; // Store the *database ID* for the API payload
+            state.data.guardian_national_id = nationalId; // Store the *national ID* for confirmation message
+            
+            reply = "--- New Baby (2/7) ---\nParent found! Please enter the baby's First Name (or official ID name):";
             break;
 
         case 2: // Collecting First Name
@@ -341,7 +353,6 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
             break;
 
         case 5: // Collecting Date of Birth
-            // Simple date validation: checks if it matches YYYY-MM-DD
             if (/\d{4}-\d{2}-\d{2}/.test(incomingText)) {
                 state.data.date_of_birth = incomingText + "T00:00:00Z"; 
                 reply = "--- New Baby (6/7) ---\nDOB confirmed. What is the baby's Nationality? (e.g., Kenyan):";
@@ -354,15 +365,14 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
         case 6: // Collecting Nationality
             state.data.nationality = incomingText;
             
-            // Set initial status values (as requested fields are in the payload)
             state.data.immunization_status = "PENDING_SCHEDULE";
             state.data.last_vaccine_received = "NONE";
-            state.data.next_appointment_date = null; // Will be set by the API logic
+            state.data.next_appointment_date = null; 
 
             reply = `
 --- Final Confirmation for Baby ---
 Please review the details for the new baby:
-Guardian ID: ${state.data.guardian_id}
+Parent's ID: ${state.data.guardian_national_id}
 Name: ${state.data.first_name} ${state.data.last_name}
 Gender: ${state.data.gender}
 DOB: ${state.data.date_of_birth.substring(0, 10)}
@@ -370,27 +380,37 @@ Nationality: ${state.data.nationality}
 
 Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
             `;
-            nextStep = 7; // Stay on Step 7 for Y/N input
+            nextStep = 7; 
             break;
 
         case 7: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                // 🛠️ FIX 4: Changed '/babies' to '/api/babies' to fix the 404 error.
-                result = await saveToLaravel('/api/babies', state.data);
+                
+                const babyPayload = {
+                    guardian_id: state.data.guardian_id, // The essential ID for the backend
+                    first_name: state.data.first_name,
+                    last_name: state.data.last_name,
+                    gender: state.data.gender,
+                    date_of_birth: state.data.date_of_birth,
+                    nationality: state.data.nationality,
+                    immunization_status: state.data.immunization_status,
+                    last_vaccine_received: state.data.last_vaccine_received,
+                    next_appointment_date: state.data.next_appointment_date,
+                    // Note: Your backend logic should handle the creation of the immunization schedule.
+                };
+                
+                result = await saveToLaravel('/api/babies', babyPayload);
 
                 if (result.success) {
-                    // 🛠️ FIX 3: Set reply here before deleting state to prevent (#100)
-                    reply = `Success! Baby ${state.data.first_name} is registered and the immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
+                    reply = `Success! Baby ${state.data.first_name} is registered under Parent ID ${state.data.guardian_national_id}. The immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
                 } else {
-                    // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
                     try {
                         const errorData = JSON.parse(result.error);
                         if (errorData.errors) {
                             const errorMessages = Object.values(errorData.errors).flat().join('\n');
                             reply = `⚠️ Registration failed! Please correct the following API errors:\n${errorMessages}\n\nType CANCEL to return to the menu.`;
                         } else {
-                            // Check for common non-validation errors (e.g., Guardian ID not found)
                             const errorMessage = errorData.message || `Error! Check logs and ensure Guardian ID ${state.data.guardian_id} exists.`;
                             reply = `Error! The baby registration failed. Type CANCEL to return to the menu.\nAPI Error: ${errorMessage.slice(0, 150)}...`;
                         }
@@ -399,9 +419,9 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     }
                 }
                 
-                userState.delete(senderId); // End flow (must be *after* setting 'reply')
+                userState.delete(senderId); // End flow
             } else if (userInput === 'n') {
-                reply = "Okay, let's start over! Please enter the Guardian ID again:";
+                reply = "Okay, let's start over! Please enter the Parent's National ID again:";
                 nextStep = 1;
                 state.data = {}; // Clear collected data
             } else {
@@ -415,7 +435,6 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
         userState.set(senderId, { ...state, step: nextStep, data: state.data });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply);
     }
 }
@@ -463,13 +482,13 @@ CHW (Creator): ${state.data.chw_number}
 
 Is this data CORRECT? Reply Y or N. (Reply N to restart)
             `;
-            nextStep = 4; // Stay on Step 4 for Y/N input
+            nextStep = 4;
             break;
 
         case 4: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                // --- POST REQUEST TO LARAVEL (Endpoint: /appointments) ---
+                
                 const payload = {
                     baby_id: state.data.baby_id,
                     appointment_date: state.data.appointment_date,
@@ -478,7 +497,6 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart)
                     chw_number: state.data.chw_number,
                 };
                 
-                // 🛠️ FIX 4: Changed '/appointments' to '/api/appointments' to fix the 404 error.
                 result = await saveToLaravel('/api/appointments', payload);
 
                 if (result.success) {
@@ -503,7 +521,6 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart)
         userState.set(senderId, { ...state, step: nextStep, data: state.data });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply);
     }
 }
@@ -520,14 +537,12 @@ async function handleModifyCancelAppointment(senderId, state, incomingText, user
                 break; // Stay on step 1
             }
             
-            // 🛠️ FIX 4: Included '/api/' prefix
             const appointmentResponse = await fetchFromLaravel(`/api/appointments/${state.data.baby_id}`);
             
             if (!appointmentResponse || !appointmentResponse.appointments || appointmentResponse.appointments.length === 0) {
                 reply = `No active appointments found for Baby ID ${state.data.baby_id}. Type CANCEL to return to the menu.`;
                 userState.delete(senderId); // End flow
             } else {
-                // Formatting the list of appointments for the CHW to choose from
                 const appointmentList = appointmentResponse.appointments.map((appt, index) => 
                     `${index + 1}. Date: ${new Date(appt.appointment_date).toLocaleDateString()} | Type: ${appt.appointment_type} | ID: ${appt.id}`
                 ).join('\n');
@@ -581,13 +596,11 @@ What would you like to do?
             break;
 
         case 4: // Execute Modify (PUT)
-            // Expecting format: YYYY-MM-DD, Note
             const parts = incomingText.split(',').map(p => p.trim());
             const newDate = parts[0];
             const newNote = parts.slice(1).join(', ') || "Modified by CHW via WhatsApp.";
 
             if (/\d{4}-\d{2}-\d{2}/.test(newDate)) {
-                // 🛠️ FIX 4: Included '/api/' prefix
                 let result = await saveToLaravel(`/api/appointments/${state.data.appointment_id}`, { 
                     appointment_date: newDate + "T00:00:00Z",
                     notes: newNote,
@@ -608,7 +621,6 @@ What would you like to do?
 
         case 5: // Execute Cancel (DELETE)
             if (userInput.toLowerCase() === 'yes') {
-                // 🛠️ FIX 4: Included '/api/' prefix
                 let result = await saveToLaravel(`/api/appointments/${state.data.appointment_id}`, null, "DELETE");
 
                 if (result.success) {
@@ -624,8 +636,8 @@ What would you like to do?
             break;
     }
 
-    // 🛠️ FIX 3: Consolidated sending logic. If the state is deleted (success/end of flow), the condition below is false.
-    if (userState.get(senderId)) {
+    // Send the reply only if the flow hasn't been terminated (state deleted)
+    if (userState.get(senderId) && reply) {
         await sendMessage(senderId, reply);
     }
 }
@@ -673,70 +685,50 @@ app.post('/whatsapp/webhook', (req, res) => {
 
                             // --- Global CANCEL Command ---
                             if (userInput === 'cancel') {
-                                if (state) {
-                                    userState.delete(senderId);
-                                    sendMessage(senderId, `Operation cancelled. Returning to main menu.\n\n${MAIN_MENU}`);
-                                } else {
-                                    sendMessage(senderId, MAIN_MENU);
-                                }
-                                continue;
-                            }
-
-                            // --- Start/Restart Conversation (No current state or initial message) ---
-                            if (!state) {
-                                switch (userInput) {
-                                    case '1':
-                                        state = { flow: 'registerParent', step: 1, data: {} };
-                                        userState.set(senderId, state);
-                                        sendMessage(senderId, `--- New Parent (1/5) ---\nPlease enter the Parent/Guardian's **Official Name** (as per ID) or their **National ID number** (e.g., Jane Wanjiku or 12345678):`);
-                                        break;
-                                    case '2':
-                                        state = { flow: 'registerBaby', step: 1, data: {} };
-                                        userState.set(senderId, state);
-                                        sendMessage(senderId, `--- New Baby (1/7) ---\nTo link the baby, please enter the **Parent/Guardian's numeric ID** (received after Option 1 registration, e.g., 25):`);
-                                        break;
-                                    case '3':
-                                        state = { flow: 'createAppointment', step: 1, data: {} };
-                                        userState.set(senderId, state);
-                                        sendMessage(senderId, `--- New Appointment (1/4) ---\nPlease enter the **Baby's numeric ID** for this ad-hoc appointment (e.g., 42):`);
-                                        break;
-                                    case '4':
-                                        state = { flow: 'modifyCancelAppointment', step: 1, data: {} };
-                                        userState.set(senderId, state);
-                                        sendMessage(senderId, `--- Modify/Cancel Appointment (1/?) ---\nPlease enter the **Baby's numeric ID** to view their current appointments:`);
-                                        break;
-                                    default:
-                                        sendMessage(senderId, MAIN_MENU);
-                                        break;
-                                }
-                                continue;
-                            }
-
-                            // --- Continue Existing Flow ---
-                            try {
-                                switch (state.flow) {
-                                    case 'registerParent':
-                                        handleRegisterParent(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'registerBaby':
-                                        handleRegisterBaby(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'createAppointment':
-                                        handleCreateAppointment(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'modifyCancelAppointment':
-                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
-                                        break;
-                                    default:
-                                        console.error(`Unknown flow: ${state.flow}`);
-                                        userState.delete(senderId);
-                                        sendMessage(senderId, `An unexpected error occurred. Please try again or type CANCEL.\n\n${MAIN_MENU}`);
-                                        break;
-                                }
-                            } catch (e) {
-                                console.error(`Error processing flow ${state.flow}:`, e);
                                 userState.delete(senderId);
-                                sendMessage(senderId, `A critical error occurred while processing your request: ${e.message.slice(0, 100)}... Returning to main menu. Please try again.\n\n${MAIN_MENU}`);
+                                sendMessage(senderId, `Conversation cancelled. Returning to the main menu.\n\n${MAIN_MENU}`);
+                                continue;
+                            }
+
+                            if (!state) {
+                                // --- Start of a new conversation or response to MAIN_MENU ---
+                                if (userInput === '1' || userInput.includes('register parent')) {
+                                    state = { flow: 'parent', step: 1, data: {} };
+                                    sendMessage(senderId, "--- New Parent (1/6) ---\nPlease enter the Parent/Guardian's Official Name or ID:");
+                                    userState.set(senderId, state);
+                                } else if (userInput === '2' || userInput.includes('register baby')) {
+                                    state = { flow: 'baby', step: 1, data: {} };
+                                    sendMessage(senderId, "--- New Baby (1/7) ---\nPlease enter the **Parent/Guardian's National ID Number** to link the baby:");
+                                    userState.set(senderId, state);
+                                } else if (userInput === '3' || userInput.includes('create appointment')) {
+                                    state = { flow: 'appointment', step: 1, data: {} };
+                                    sendMessage(senderId, "--- New Appointment (1/4) ---\nPlease enter the *Baby ID* for this ad-hoc appointment:");
+                                    userState.set(senderId, state);
+                                } else if (userInput === '4' || userInput.includes('modify cancel')) {
+                                     state = { flow: 'modify_cancel', step: 1, data: {} };
+                                    sendMessage(senderId, "--- Modify/Cancel Appointment (1/2) ---\nPlease enter the *Baby ID* to view active appointments:");
+                                    userState.set(senderId, state);
+                                } else {
+                                    // Send the introductory and main menu message
+                                    sendMessage(senderId, `${INTRO_MESSAGE}\n\n${MAIN_MENU}`);
+                                }
+                            } else {
+                                // --- Continue an existing flow ---
+                                try {
+                                    if (state.flow === 'parent') {
+                                        handleRegisterParent(senderId, state, incomingText, userInput);
+                                    } else if (state.flow === 'baby') {
+                                        handleRegisterBaby(senderId, state, incomingText, userInput);
+                                    } else if (state.flow === 'appointment') {
+                                        handleCreateAppointment(senderId, state, incomingText, userInput);
+                                    } else if (state.flow === 'modify_cancel') {
+                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
+                                    }
+                                } catch (error) {
+                                    console.error(`Error in flow handler for ${senderId} (${state.flow}):`, error);
+                                    sendMessage(senderId, "⚠️ An unexpected error occurred. Type CANCEL to return to the main menu.");
+                                    userState.delete(senderId);
+                                }
                             }
                         }
                     }
@@ -746,7 +738,8 @@ app.post('/whatsapp/webhook', (req, res) => {
     }
 });
 
-// --- Server Startup ---
+// --- Start Server ---
 app.listen(port, () => {
-    console.log(`\nWhatsApp Bot running on port ${port}`);
+    console.log(`\nServer is running on port ${port}`);
+    console.log(`WhatsApp Webhook listening at http://localhost:${port}/whatsapp/webhook`);
 });
