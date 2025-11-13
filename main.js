@@ -241,7 +241,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     // ✅ FIX: Use the collected gender to satisfy the CHECK constraint
                     gender: state.data.gender, 
                     
-                    role: "Guardian", // CRITICAL: Sets the user role for the Parent
+                    role: "guardian", // CRITICAL: Sets the user role for the Parent
                     nationality: "Kenyan", // Placeholder
                     national_id: 0, // Placeholder
                     date_of_birth: "2000-01-01T00:00:00Z", // Placeholder
