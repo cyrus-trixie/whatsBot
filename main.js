@@ -156,8 +156,6 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
 }
 
 
-// --- REST OF THE CODE REMAINS UNCHANGED (WEBHOOKS) ---
-
 // --- FLOW HANDLER: Register Parent/Guardian (Option 1) ---
 async function handleRegisterParent(senderId, state, incomingText, userInput) {
     let nextStep = state.step + 1;
@@ -208,14 +206,15 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
             if (userInput === 'y') {
                 isConfirmed = true;
                 
-                // --- CRITICAL FIX: NEW PAYLOAD to match ALL required API fields ---
+                // 🔑 CRITICAL FIX: Use a placeholder password that meets the 8-character minimum.
+                const TEMP_PASSWORD = 'ImmunoBotPassword123';
+                
                 const registerPayload = {
                     first_name: firstName,
                     last_name: lastName,
                     // Use the phone number to create a unique placeholder email
                     email: `${state.data.whatsapp_number}@immunobot.com`, 
-                    // Use the name/ID as the password, as it's the only security-related input
-                    password: state.data.official_name, 
+                    password: TEMP_PASSWORD, // ⬅️ UPDATED: Meets 8-char minimum
                     phone_number: state.data.whatsapp_number,
                     gender: "UNKNOWN", // Placeholder, as not collected
                     role: "Guardian", // CRITICAL: Sets the user role for the Parent
@@ -227,7 +226,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     next_of_kin: state.data.official_name, // Use self as placeholder
                     next_of_kin_contact: state.data.whatsapp_number, // Use self-contact as placeholder
                     no_of_children: 0, 
-                    password_confirmation: state.data.official_name // Must match 'password'
+                    password_confirmation: TEMP_PASSWORD // ⬅️ MUST MATCH
                 };
                 
                 // 🛠️ FIX 1: Changed '/register' to '/api/register' to fix the 404 error.
@@ -496,7 +495,7 @@ async function handleModifyCancelAppointment(senderId, state, incomingText, user
                 break; // Stay on step 1
             }
             
-            // 🛠️ FIX 1: Changed '/appointments' to '/api/appointments' to fix the 404 error.
+            // 🛠️ FIX 1: Included '/api/' prefix
             const appointmentResponse = await fetchFromLaravel(`/api/appointments/${state.data.baby_id}`);
             
             if (!appointmentResponse || !appointmentResponse.appointments || appointmentResponse.appointments.length === 0) {
@@ -673,37 +672,42 @@ app.post('/whatsapp/webhook', (req, res) => {
                                     case 'modify_cancel_appointment':
                                         handleModifyCancelAppointment(senderId, state, incomingText, userInput);
                                         break;
-                                    // Add other flow handlers here
-                                }
-                                continue; // Skip to next message/entry
-                            }
-                            
-                            // 3. MAIN MENU SELECTION HANDLER (Start of a new flow)
-                            if (state.flow === 'menu') {
-                                switch (userInput) {
-                                    case '1':
-                                        userState.set(senderId, { flow: 'register_parent', step: 1, data: {} });
-                                        reply = "--- New Parent (1/4) ---\nPlease enter the Parent/Guardian's Official Name or ID (This will be used as their login password):";
-                                        break;
-                                    case '2':
-                                        userState.set(senderId, { flow: 'register_baby', step: 1, data: {} });
-                                        reply = "--- New Baby (1/7) ---\nPlease enter the Parent/Guardian's numeric **ID** (the ID they were assigned after registration):";
-                                        break;
-                                    case '3':
-                                        userState.set(senderId, { flow: 'create_appointment', step: 1, data: {} });
-                                        reply = "--- New Appointment (1/4) ---\nPlease enter the numeric **Baby ID** for the child needing an ad-hoc appointment:";
-                                        break;
-                                    case '4':
-                                        userState.set(senderId, { flow: 'modify_cancel_appointment', step: 1, data: {} });
-                                        reply = "--- Manage Appointment (1/2) ---\nPlease enter the numeric **Baby ID** whose appointments you want to manage:";
-                                        break;
                                     default:
-                                        reply = INTRO_MESSAGE + '\n\n' + MAIN_MENU;
+                                        reply = `Something went wrong in the flow (${state.flow}). Type CANCEL to return to the main menu.`;
+                                        userState.delete(senderId);
+                                        sendMessage(senderId, reply);
                                         break;
                                 }
-                                sendMessage(senderId, reply);
                                 continue;
                             }
+
+                            // 3. MAIN MENU HANDLER
+                            switch (userInput) {
+                                case '1':
+                                    userState.set(senderId, { flow: 'register_parent', step: 1, data: {} });
+                                    reply = "--- New Parent (1/4) ---\nPlease enter the Parent/Guardian's Official Name or National ID:";
+                                    break;
+                                case '2':
+                                    // Start the baby registration flow at step 1: Collect Guardian ID
+                                    userState.set(senderId, { flow: 'register_baby', step: 1, data: {} });
+                                    reply = "--- New Baby (1/7) ---\nTo register a baby, you need the *numeric ID* of the Guardian (Parent) you registered in Option 1. Please enter the Guardian ID:";
+                                    break;
+                                case '3':
+                                    // Start the ad-hoc appointment flow at step 1: Collect Baby ID
+                                    userState.set(senderId, { flow: 'create_appointment', step: 1, data: {} });
+                                    reply = "--- Create Ad-hoc Appointment (1/4) ---\nPlease enter the *Baby ID* for whom you want to create an appointment:";
+                                    break;
+                                case '4':
+                                    // Start the modify/cancel appointment flow at step 1: Collect Baby ID
+                                    userState.set(senderId, { flow: 'modify_cancel_appointment', step: 1, data: {} });
+                                    reply = "--- Modify/Cancel Appointment (1/5) ---\nPlease enter the *Baby ID* whose appointments you want to manage:";
+                                    break;
+                                default:
+                                    // Initial greeting or general unknown command
+                                    reply = `Hello! I didn't understand that. Please select an option from the menu:\n\n${MAIN_MENU}`;
+                                    break;
+                            }
+                            sendMessage(senderId, reply);
                         }
                     }
                 }
@@ -712,8 +716,8 @@ app.post('/whatsapp/webhook', (req, res) => {
     }
 });
 
-
-// --- START SERVER ---
+// --- SERVER START ---
 app.listen(port, () => {
-    console.log(`Immuno CHW Bot listening on port ${port}`);
+    console.log(`Server is listening on port ${port}`);
+    console.log(`Open: http://localhost:${port}/whatsapp/webhook`);
 });
