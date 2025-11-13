@@ -16,7 +16,7 @@ const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
 
 // NEW: API Base URL and Static Token Variable
 const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE; 
-const LARAVEL_API_TOKEN = process.env.LARAVEL_API_TOKEN; // <<< NEW ENVIRONMENT VARIABLE
+const LARAVEL_API_TOKEN = process.env.LARAVEL_API_TOKEN;
 
 // WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
@@ -171,38 +171,59 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
     switch (state.step) {
         case 1: // Collecting Name
             state.data.official_name = incomingText;
-            reply = "--- New Parent (2/4) ---\nGot it! Please enter the Parent's WhatsApp Number (e.g., 2547XXXXXXXX) for future reminders:";
+            
+            // 🆕 NEW STEP: Collect Gender
+            reply = "--- New Parent (2/5) ---\nGot it! Is the Parent/Guardian Male or Female? (Reply with M or F):";
             break;
-        case 2: // Collecting WhatsApp Number
+            
+        case 2: // 🆕 NEW STEP: Collecting Gender (Fixes Integrity Constraint Violation)
+            if (userInput === 'm' || userInput === 'male') {
+                state.data.gender = "Male";
+            } else if (userInput === 'f' || userInput === 'female') {
+                state.data.gender = "Female";
+            } else {
+                reply = "Invalid input. Please reply with M for Male or F for Female:";
+                nextStep = 2; // Stay on step 2
+                break;
+            }
+            // Move to the next question
+            reply = "--- New Parent (3/5) ---\nGreat! Please enter the Parent's WhatsApp Number (e.g., 2547XXXXXXXX) for future reminders:";
+            break;
+
+        case 3: // Collecting WhatsApp Number (Previously step 2)
             // Basic number format validation (Kenya mobile number pattern)
             if (!/^(?:254|\+254|0)?(7|1)\d{8}$/.test(incomingText)) {
                 reply = "Invalid phone number format. Please ensure it starts with 2547 or 2541 (e.g., 2547XXXXXXXX):";
-                nextStep = 2; // Stay on step 2
+                nextStep = 3; // Stay on step 3
                 break;
             }
             // Clean number to 254 format for API consistency
             state.data.whatsapp_number = incomingText.replace(/^(0|\+)/, '254'); 
-            reply = "--- New Parent (3/4) ---\nGreat! What is the Nearest Clinic to this household?";
+            reply = "--- New Parent (4/5) ---\nGreat! What is the Nearest Clinic to this household?";
             break;
-        case 3: // Collecting Nearest Clinic
+            
+        case 4: // Collecting Nearest Clinic (Previously step 3)
             state.data.nearest_clinic = incomingText;
-            reply = "--- New Parent (4/4) ---\nAnd finally, the **Residence Location** (e.g., estate/village name)?";
+            reply = "--- New Parent (5/5) ---\nAnd finally, the **Residence Location** (e.g., estate/village name)?";
             break;
-        case 4: // Collecting Residence Location
+            
+        case 5: // Collecting Residence Location (Previously step 4)
             state.data.residence_location = incomingText;
             reply = `
 --- Final Confirmation ---
 Please review the details for the new parent:
 Name/ID: ${state.data.official_name}
+Gender: ${state.data.gender}
 WhatsApp: ${state.data.whatsapp_number}
 Clinic: ${state.data.nearest_clinic}
 Residence: ${state.data.residence_location}
 
 Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
             `;
-            nextStep = 5; // Stay on Step 5 for Y/N input
+            nextStep = 6; // Moved to Step 6 for Y/N input
             break;
-        case 5: // Confirmation (Y/N)
+            
+        case 6: // Confirmation (Y/N) (Previously step 5)
             if (userInput === 'y') {
                 isConfirmed = true;
                 
@@ -214,9 +235,12 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     last_name: lastName,
                     // Use the phone number to create a unique placeholder email
                     email: `${state.data.whatsapp_number}@immunobot.com`, 
-                    password: TEMP_PASSWORD, // ⬅️ UPDATED: Meets 8-char minimum
+                    password: TEMP_PASSWORD, 
                     phone_number: state.data.whatsapp_number,
-                    gender: "UNKNOWN", // Placeholder, as not collected
+                    
+                    // ✅ FIX: Use the collected gender to satisfy the CHECK constraint
+                    gender: state.data.gender, 
+                    
                     role: "Guardian", // CRITICAL: Sets the user role for the Parent
                     nationality: "Kenyan", // Placeholder
                     national_id: 0, // Placeholder
@@ -229,7 +253,6 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     password_confirmation: TEMP_PASSWORD // ⬅️ MUST MATCH
                 };
                 
-                // 🛠️ FIX 1: Changed '/register' to '/api/register' to fix the 404 error.
                 result = await saveToLaravel('/api/register', registerPayload);
 
                 if (result.success) {
@@ -259,7 +282,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 state.data = {}; // Clear collected data
             } else {
                 reply = "I didn't quite catch that. Please reply Y to confirm the details or N to restart the registration.";
-                nextStep = 5;
+                nextStep = 6;
             }
             break;
     }
@@ -669,45 +692,52 @@ app.post('/whatsapp/webhook', (req, res) => {
                                     case 'create_appointment':
                                         handleCreateAppointment(senderId, state, incomingText, userInput);
                                         break;
-                                    case 'modify_cancel_appointment':
+                                    case 'manage_appointment':
                                         handleModifyCancelAppointment(senderId, state, incomingText, userInput);
                                         break;
                                     default:
-                                        reply = `Something went wrong in the flow (${state.flow}). Type CANCEL to return to the main menu.`;
+                                        // Should not happen, but a safe fallback
+                                        reply = `Error: Unknown flow. Returning to main menu.\n\n${MAIN_MENU}`;
                                         userState.delete(senderId);
                                         sendMessage(senderId, reply);
-                                        break;
                                 }
                                 continue;
                             }
 
-                            // 3. MAIN MENU HANDLER
+                            // 3. MAIN MENU SELECTION
                             switch (userInput) {
                                 case '1':
+                                case 'register new parent/guardian (household)':
+                                    reply = "--- New Parent (1/5) ---\nPlease enter the Parent/Guardian's Official Name (or official ID name):";
                                     userState.set(senderId, { flow: 'register_parent', step: 1, data: {} });
-                                    reply = "--- New Parent (1/4) ---\nPlease enter the Parent/Guardian's Official Name or National ID:";
                                     break;
                                 case '2':
-                                    // Start the baby registration flow at step 1: Collect Guardian ID
+                                case 'register new baby (child & schedule)':
+                                    reply = "--- New Baby (1/7) ---\nPlease enter the *numeric Guardian ID* for this baby's parent:";
                                     userState.set(senderId, { flow: 'register_baby', step: 1, data: {} });
-                                    reply = "--- New Baby (1/7) ---\nTo register a baby, you need the *numeric ID* of the Guardian (Parent) you registered in Option 1. Please enter the Guardian ID:";
                                     break;
                                 case '3':
-                                    // Start the ad-hoc appointment flow at step 1: Collect Baby ID
+                                case 'create ad-hoc appointment':
+                                    reply = "--- New Appointment (1/4) ---\nPlease enter the *numeric Baby ID* for the appointment:";
                                     userState.set(senderId, { flow: 'create_appointment', step: 1, data: {} });
-                                    reply = "--- Create Ad-hoc Appointment (1/4) ---\nPlease enter the *Baby ID* for whom you want to create an appointment:";
                                     break;
                                 case '4':
-                                    // Start the modify/cancel appointment flow at step 1: Collect Baby ID
-                                    userState.set(senderId, { flow: 'modify_cancel_appointment', step: 1, data: {} });
-                                    reply = "--- Modify/Cancel Appointment (1/5) ---\nPlease enter the *Baby ID* whose appointments you want to manage:";
+                                case 'modify/cancel appointment':
+                                    reply = "--- Manage Appointment (1/2) ---\nPlease enter the *numeric Baby ID* whose appointments you want to manage:";
+                                    userState.set(senderId, { flow: 'manage_appointment', step: 1, data: {} });
                                     break;
                                 default:
-                                    // Initial greeting or general unknown command
-                                    reply = `Hello! I didn't understand that. Please select an option from the menu:\n\n${MAIN_MENU}`;
-                                    break;
+                                    // Send the main menu if input is unrecognized and not part of an active flow
+                                    reply = `I didn't recognize that command. Please select a number from the menu.\n\n${MAIN_MENU}`;
                             }
-                            sendMessage(senderId, reply);
+
+                            // Send the main menu reply for selections that started a flow
+                            if (state.flow === 'menu') {
+                                sendMessage(senderId, reply);
+                            }
+                        } else if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
+                            // Message from an unauthorized number
+                            sendMessage(senderId, "Hello! I am Immuno, the Community Health Worker assistant. Access is restricted to authorized CHWs only.");
                         }
                     }
                 }
@@ -716,8 +746,7 @@ app.post('/whatsapp/webhook', (req, res) => {
     }
 });
 
-// --- SERVER START ---
+// --- START SERVER ---
 app.listen(port, () => {
-    console.log(`Server is listening on port ${port}`);
-    console.log(`Open: http://localhost:${port}/whatsapp/webhook`);
+    console.log(`Server is running on port ${port}`);
 });
