@@ -69,6 +69,8 @@ async function sendMessage(to, text) {
 function getLaravelApiHeaders(method) {
     const headers = {
         'Content-Type': 'application/json',
+        // --- IMPROVEMENT 1: ADD ACCEPT HEADER ---
+        'Accept': 'application/json' 
     };
     // Add Authorization header for all protected routes (all but /register)
     if (LARAVEL_API_TOKEN) {
@@ -130,9 +132,6 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
 
         if (!response.ok) {
             let errorData = await response.text();
-            // Critical fix: Ensure errorData is a string, then trim/slice for logging
-            const logError = errorData.length > 200 ? `${errorData.substring(0, 200)}...` : errorData;
-            console.error(`Laravel API error [Status: ${response.status}]:`, logError); // Improved error logging
             // Return the full error data as a string
             return { success: false, error: errorData }; 
         } else {
@@ -151,7 +150,7 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
 }
 
 
-// --- REST OF THE CODE REMAINS UNCHANGED ---
+// --- REST OF THE CODE REMAINS UNCHANGED (WEBHOOKS) ---
 
 // --- FLOW HANDLER: Register Parent/Guardian (Option 1) ---
 async function handleRegisterParent(senderId, state, incomingText, userInput) {
@@ -231,9 +230,21 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 if (result.success) {
                     reply = `Success! Parent ${state.data.official_name} is successfully registered via the API. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
-                    const errorMessage = String(result.error);
-                    const slicedError = errorMessage.slice(0, 100);
-                    reply = `Error saving data. The API failed due to a missing/invalid field. API Error: ${slicedError}...\n\nPlease type CANCEL to return to the menu and review your Laravel logs.`;
+                    // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
+                    try {
+                        const errorData = JSON.parse(result.error);
+                        if (errorData.errors) {
+                            // Format Laravel validation errors for the user
+                            const errorMessages = Object.values(errorData.errors).flat().join('\n');
+                            reply = `⚠️ Registration failed! Please correct the following API errors:\n${errorMessages}\n\nType CANCEL to return to the menu.`;
+                        } else {
+                            // Generic API error (e.g., 500, unhandled 404/401)
+                            reply = `Error saving data. Check the logs for details. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
+                        }
+                    } catch (e) {
+                        // If API error response is not JSON (e.g., HTML 404 page)
+                        reply = `Error saving data. Could not process API response. Check the logs for a non-JSON error. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
+                    }
                 }
                 userState.delete(senderId); // End flow
             } else if (userInput === 'n') {
@@ -337,9 +348,20 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 if (result.success) {
                     reply = `Success! Baby ${state.data.first_name} is registered and the immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
                 } else {
-                    const errorMessage = String(result.error);
-                    const slicedError = errorMessage.slice(0, 100);
-                    reply = `Error! The baby registration failed. Check the logs and ensure your Laravel API is running and that Guardian ID ${state.data.guardian_id} exists. Type CANCEL to return to the menu.\nAPI Error: ${slicedError}...`;
+                    // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
+                    try {
+                        const errorData = JSON.parse(result.error);
+                        if (errorData.errors) {
+                            const errorMessages = Object.values(errorData.errors).flat().join('\n');
+                            reply = `⚠️ Registration failed! Please correct the following API errors:\n${errorMessages}\n\nType CANCEL to return to the menu.`;
+                        } else {
+                            // Check for common non-validation errors (e.g., Guardian ID not found)
+                            const errorMessage = errorData.message || `Error! Check logs and ensure Guardian ID ${state.data.guardian_id} exists.`;
+                            reply = `Error! The baby registration failed. Type CANCEL to return to the menu.\nAPI Error: ${errorMessage.slice(0, 150)}...`;
+                        }
+                    } catch (e) {
+                        reply = `Error! Could not process API response. Check the logs for a non-JSON error. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
+                    }
                 }
                 
                 userState.delete(senderId); // End flow
@@ -423,9 +445,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart)
                 if (result.success) {
                     reply = `Success! An Ad-hoc Appointment for Baby ID ${state.data.baby_id} on ${state.data.appointment_date.substring(0, 10)} is created. The parent will be notified.\n\n${MAIN_MENU}`;
                 } else {
-                    const errorMessage = String(result.error);
-                    const slicedError = errorMessage.slice(0, 100);
-                    reply = `Error! Appointment creation failed. Check the logs and ensure your Laravel API is running. Type CANCEL.\nAPI Error: ${slicedError}...`;
+                    reply = `Error! Appointment creation failed. Check the logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
                 }
                 
                 userState.delete(senderId); // End flow
@@ -526,7 +546,7 @@ What would you like to do?
 
             if (/\d{4}-\d{2}-\d{2}/.test(newDate)) {
                 // --- PUT REQUEST TO LARAVEL (Endpoint: /appointments/{id}) ---
-                result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, { 
+                let result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, { 
                     appointment_date: newDate + "T00:00:00Z",
                     notes: newNote,
                     chw_number: senderId // Audit who modified it
@@ -535,7 +555,7 @@ What would you like to do?
                 if (result.success) {
                     reply = `Success! Appointment ID ${state.data.appointment_id} modified to ${newDate} with note: "${newNote}".\n\n${MAIN_MENU}`;
                 } else {
-                    reply = `Error modifying appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 100)}...`;
+                    reply = `Error modifying appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
                 }
                 userState.delete(senderId);
             } else {
@@ -543,38 +563,33 @@ What would you like to do?
                 userState.set(senderId, { ...state, step: 4 });
             }
             break;
-        
+
         case 5: // Execute Cancel (DELETE)
-            if (userInput === 'yes') {
+            if (userInput.toLowerCase() === 'yes') {
                 // --- DELETE REQUEST TO LARAVEL (Endpoint: /appointments/{id}) ---
-                result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, null, "DELETE"); 
+                let result = await saveToLaravel(`/appointments/${state.data.appointment_id}`, null, "DELETE");
 
                 if (result.success) {
                     reply = `Success! Appointment ID ${state.data.appointment_id} has been CANCELLED.\n\n${MAIN_MENU}`;
                 } else {
-                    reply = `Error cancelling appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 100)}...`;
+                    reply = `Error cancelling appointment. Check logs. Type CANCEL.\nAPI Error: ${String(result.error).slice(0, 150)}...`;
                 }
                 userState.delete(senderId);
             } else {
-                reply = "Cancellation not confirmed. Returning to the action menu. Reply 1 to Modify or 2 to Cancel:";
-                userState.set(senderId, { ...state, step: 3 });
+                reply = "Cancellation not confirmed. Please reply YES to cancel or CANCEL to return to the main menu.";
+                userState.set(senderId, { ...state, step: 5 });
             }
             break;
     }
 
-    // Only send reply if the flow has not ended (userState.delete)
-    if (userState.has(senderId)) {
+    if (userState.get(senderId)?.step === nextStep) {
+        // Only send if the flow continues (steps 1, 2, 3) or on error
         await sendMessage(senderId, reply);
     }
 }
 
 
-// --- Health Check Route ---
-app.get('/', (req, res) => {
-    res.send({ status: 'Immuno Bot running', api_base: LARAVEL_API_BASE || 'Not Configured', api_token_status: LARAVEL_API_TOKEN ? 'Loaded' : 'Missing' });
-});
-
-// --- Webhook Verification (GET) ---
+// --- WEBHOOK ENDPOINT (GET) for verification ---
 app.get('/whatsapp/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -582,134 +597,121 @@ app.get('/whatsapp/webhook', (req, res) => {
 
     if (mode && token) {
         if (mode === 'subscribe' && token === verifyToken) {
-            console.log('[OK] Webhook verified successfully!');
-            return res.status(200).send(challenge);
+            console.log('WEBHOOK_VERIFIED');
+            res.status(200).send(challenge);
         } else {
-            return res.status(403).send('Forbidden: Verification token mismatch.');
+            res.sendStatus(403);
         }
+    } else {
+        res.sendStatus(400);
     }
-    res.status(400).send('Bad Request: Missing hub.mode or hub.token.');
 });
 
-// -------------------------------------------------------------------------------------
-// --- CORE LOGIC: Handle Incoming WhatsApp Messages (POST) ---
-// -------------------------------------------------------------------------------------
-app.post('/whatsapp/webhook', async (req, res) => {
-    // 1. Always respond immediately
-    res.sendStatus(200);
+// --- WEBHOOK ENDPOINT (POST) for incoming messages ---
+app.post('/whatsapp/webhook', (req, res) => {
+    // Acknowledge receipt of the message payload immediately
+    res.sendStatus(200); 
 
     const body = req.body;
-    // Check for nested message structure
-    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
+    
+    // Check for changes (messages) in the payload
+    if (body.object === 'whatsapp_business_account' && body.entry) {
+        for (const entry of body.entry) {
+            for (const change of entry.changes) {
+                if (change.field === 'messages' && change.value.messages) {
+                    for (const message of change.value.messages) {
+                        const senderId = message.from;
+                        // Filter for only text messages from authorized CHWs
+                        if (message.type === 'text' && AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
+                            const incomingText = message.text.body.trim();
+                            const userInput = incomingText.toLowerCase();
 
-    if (!messages || messages.length === 0) {
-        return; // Exit cleanly if not a message
-    }
+                            // Retrieve or initialize user state
+                            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
+                            let reply = '';
+                            
+                            // 1. GLOBAL CANCEL/MENU COMMAND
+                            if (userInput === 'cancel' || userInput === 'menu') {
+                                userState.delete(senderId);
+                                state = { flow: 'menu', step: 0, data: {} };
+                                reply = `You have returned to the main menu.\n\n${MAIN_MENU}`;
+                                sendMessage(senderId, reply);
+                                continue;
+                            }
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    console.log(`\n--- [${timestamp}] Incoming message payload received ---`);
+                            // 2. ACTIVE FLOW HANDLER
+                            if (state.flow !== 'menu' && state.step > 0) {
+                                // Delegate to the appropriate flow handler based on the saved state
+                                switch (state.flow) {
+                                    case 'register_parent':
+                                        handleRegisterParent(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'register_baby':
+                                        handleRegisterBaby(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'create_appointment':
+                                        handleCreateAppointment(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'modify_cancel_appointment':
+                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
+                                        break;
+                                    // Add other flow handlers here
+                                }
+                                continue; // Skip to next message/entry
+                            }
+                            
+                            // 3. MAIN MENU SELECTION HANDLER (Start of a new flow)
+                            if (state.flow === 'menu') {
+                                switch (userInput) {
+                                    case '1':
+                                        userState.set(senderId, { flow: 'register_parent', step: 1, data: {} });
+                                        reply = "--- New Parent (1/4) ---\nPlease enter the Parent/Guardian's Official Name or ID:";
+                                        break;
+                                    case '2':
+                                        userState.set(senderId, { flow: 'register_baby', step: 1, data: {} });
+                                        reply = "--- New Baby (1/7) ---\nPlease enter the Parent/Guardian's *Guardian ID* (The ID returned by Option 1 registration, e.g., 1, 25):";
+                                        break;
+                                    case '3':
+                                        userState.set(senderId, { flow: 'create_appointment', step: 1, data: {} });
+                                        reply = "--- New Ad-hoc Appointment (1/4) ---\nPlease enter the *Baby ID* for the appointment:";
+                                        break;
+                                    case '4':
+                                        userState.set(senderId, { flow: 'modify_cancel_appointment', step: 1, data: {} });
+                                        reply = "--- Modify/Cancel Appointment (1/?) ---\nPlease enter the *Baby ID* whose appointments you want to manage:";
+                                        break;
+                                    case 'babies': // Hidden debug command
+                                        fetchFromLaravel('/babies').then(data => {
+                                            const count = data ? data.data.length : 0;
+                                            const msg = `DEBUG: Found ${count} babies in the system.`;
+                                            sendMessage(senderId, msg);
+                                        }).catch(err => {
+                                            sendMessage(senderId, `DEBUG Error: Could not fetch babies. Check API logs.`);
+                                        });
+                                        continue;
+                                    default:
+                                        // Default response for unrecognized input at the main menu
+                                        reply = `Jambo! I didn't recognize that command. Please select an option (1-4) or type CANCEL.\n\n${MAIN_MENU}`;
+                                        break;
+                                }
 
-    for (const message of messages) {
-        if (message.type === 'text') {
-            const incomingText = message.text.body.trim();
-            // Get senderId and strip any non-digit characters to ensure clean matching/storage
-            const senderId = message.from.replace(/\D/g, ''); 
-
-            // 0.5. AUTHORIZATION GATE
-            if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
-                console.warn(`UNAUTHORIZED access attempt from ${senderId}.`);
-                await sendMessage(senderId, "Access Denied. This bot is restricted to registered Community Health Workers only.");
-                return; 
-            }
-
-            console.log(`Message from ${senderId}: "${incomingText}"`);
-
-            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
-            const userInput = incomingText.toLowerCase();
-
-            // --- 0. CANCEL COMMAND (Robust Check) ---
-            if (userInput === 'cancel' || userInput === 'cancle' || userInput === 'stop' || userInput === 'menu') {
-                if (state.flow !== 'menu') {
-                    userState.delete(senderId);
-                    await sendMessage(senderId, "Operation cancelled. Heading back to the main menu.");
+                                // If a flow was started (case 1, 2, 3, 4), send the reply
+                                if (reply !== `Jambo! I didn't recognize that command. Please select an option (1-4) or type CANCEL.\n\n${MAIN_MENU}`) {
+                                    sendMessage(senderId, reply);
+                                }
+                            }
+                            // Fallback for default response (in case of unhandled input)
+                            else if (!userState.get(senderId)) {
+                                sendMessage(senderId, `Jambo! Welcome back. Please select an option (1-4) or type CANCEL.\n\n${MAIN_MENU}`);
+                            }
+                        }
+                    }
                 }
-                await sendMessage(senderId, MAIN_MENU);
-                return;
             }
-
-
-            // --------------------------------------------------------
-            // 1. HANDLE USER IN AN ACTIVE FLOW (Sequential Prompts)
-            // --------------------------------------------------------
-            if (state.flow === 'register_parent') {
-                await handleRegisterParent(senderId, state, incomingText, userInput);
-                return;
-            }
-            
-            if (state.flow === 'register_baby') {
-                await handleRegisterBaby(senderId, state, incomingText, userInput);
-                return;
-            }
-
-            if (state.flow === 'create_appointment') {
-                await handleCreateAppointment(senderId, state, incomingText, userInput);
-                return;
-            }
-
-            if (state.flow === 'modify_appointment') {
-                await handleModifyCancelAppointment(senderId, state, incomingText, userInput);
-                return;
-            }
-
-
-            // --------------------------------------------------------
-            // 2. HANDLE MAIN MENU SELECTION (flow: 'menu')
-            // --------------------------------------------------------
-
-            if (['1', '2', '3', '4'].includes(userInput)) {
-                let nextFlow;
-                let firstPrompt = "";
-
-                if (userInput === '1') {
-                    nextFlow = 'register_parent';
-                    firstPrompt = "--- New Parent Registration (1/4) ---\nHello! Please enter the Parent/Guardian's Official Name or ID to start:";
-                } else if (userInput === '2') {
-                    nextFlow = 'register_baby';
-                    firstPrompt = "--- New Baby Registration (1/7) ---\nTo link the baby, please enter the Guardian ID (the number from their registration):";
-                } else if (userInput === '3') { 
-                    nextFlow = 'create_appointment';
-                    firstPrompt = "--- New Ad-hoc Appointment (1/4) ---\nTo schedule an appointment, please enter the Baby ID for the child:";
-                } else { // Option 4
-                    nextFlow = 'modify_appointment';
-                    firstPrompt = "--- Modify/Cancel Appointment (1/5) ---\nPlease enter the Baby ID for the child whose appointments you want to manage:";
-                }
-                
-                // Set the new state to start the flow (Step 1)
-                userState.set(senderId, { flow: nextFlow, step: 1, data: {} });
-                
-                // IMMEDIATE NEXT STEP: Start the first prompt for the selected flow.
-                await sendMessage(senderId, firstPrompt);
-                
-            } else if (userInput === 'babies') {
-                // Kept the 'babies' GET command for direct testing/debugging
-                const babyResponse = await fetchFromLaravel('/babies');
-                
-                if (babyResponse && babyResponse.babies && babyResponse.babies.length > 0) {
-                    const babyList = babyResponse.babies.map(baby => {
-                        const dob = baby.date_of_birth ? new Date(baby.date_of_birth).toLocaleDateString('en-KE') : 'Unknown';
-                        return `Baby: ${baby.first_name} (DOB: ${dob}, Status: ${baby.immunization_status || 'N/A'})`;
-                    }).join('\n');
-                    await sendMessage(senderId, `API Test Success - Found ${babyResponse.babies.length} Babies:\n\n${babyList}`);
-                } else {
-                    await sendMessage(senderId, "API Test Fail: No baby records found or API error.");
-                }
-            } 
         }
     }
 });
 
-
-// --- Start Server ---
+// --- Server Start ---
 app.listen(port, () => {
     console.log(`\nImmuno CHW Bot listening on port ${port}`);
     if (!LARAVEL_API_BASE) {
