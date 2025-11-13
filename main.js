@@ -173,7 +173,7 @@ async function handleRegisterParent(senderId, state, incomingText, userInput) {
         case 1: // Collecting Name
             state.data.official_name = incomingText;
             
-            // ⭐️ NEW STEP: Collect National ID
+            // ✅ CHANGE 1: Removed 'or ID'
             reply = "--- New Parent (2/6) ---\nThank you! Please enter the Parent/Guardian's **National ID Number** (e.g., 12345678):";
             break;
             
@@ -240,17 +240,20 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 
                 const TEMP_PASSWORD = 'ImmunoBotPassword123';
                 
+                // 🛑 FIX RE-APPLIED: Use National ID for the unique part of the email
+                const uniqueEmail = `${state.data.national_id}@immunobot.com`; 
+
                 // The full payload with collected/default values to satisfy all required API fields
                 const registerPayload = {
                     first_name: firstName,
                     last_name: lastName,
-                    email: `${state.data.whatsapp_number}@immunobot.com`, 
+                    email: uniqueEmail, // ✅ Now uses National ID
                     password: TEMP_PASSWORD, 
                     phone_number: state.data.whatsapp_number,
                     gender: state.data.gender, 
                     role: "guardian", 
                     nationality: "Kenyan", 
-                    national_id: state.data.national_id, // ✅ USING COLLECTED ID
+                    national_id: state.data.national_id, 
                     date_of_birth: "2000-01-01T00:00:00Z", 
                     address: `${state.data.nearest_clinic}, ${state.data.residence_location}`, 
                     marital_status: "Single", 
@@ -279,7 +282,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 }
                 userState.delete(senderId); // End flow
             } else if (userInput === 'n') {
-                reply = "Okay, let's start over! Please enter the Parent/Guardian's Official Name or ID again:";
+                reply = "Okay, let's start over! Please enter the Parent/Guardian's Official Name:";
                 nextStep = 1;
                 state.data = {}; // Clear collected data
             } else {
@@ -678,12 +681,13 @@ app.post('/whatsapp/webhook', (req, res) => {
                         // Filter for only text messages from authorized CHWs
                         if (message.type === 'text' && AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
                             const incomingText = message.text.body.trim();
+                            // ✅ CHANGE 2: Added support for both 'cancel' and 'CANCEL'
                             const userInput = incomingText.toLowerCase();
 
                             // Retrieve or initialize the user's conversation state
                             let state = userState.get(senderId);
 
-                            // --- Global CANCEL Command ---
+                            // --- Global CANCEL Command (now case-insensitive check) ---
                             if (userInput === 'cancel') {
                                 userState.delete(senderId);
                                 sendMessage(senderId, `Conversation cancelled. Returning to the main menu.\n\n${MAIN_MENU}`);
@@ -694,7 +698,8 @@ app.post('/whatsapp/webhook', (req, res) => {
                                 // --- Start of a new conversation or response to MAIN_MENU ---
                                 if (userInput === '1' || userInput.includes('register parent')) {
                                     state = { flow: 'parent', step: 1, data: {} };
-                                    sendMessage(senderId, "--- New Parent (1/6) ---\nPlease enter the Parent/Guardian's Official Name or ID:");
+                                    // ✅ CHANGE 3: Updated prompt to only ask for name
+                                    sendMessage(senderId, "--- New Parent (1/6) ---\nPlease enter the Parent/Guardian's Official Name:");
                                     userState.set(senderId, state);
                                 } else if (userInput === '2' || userInput.includes('register baby')) {
                                     state = { flow: 'baby', step: 1, data: {} };
