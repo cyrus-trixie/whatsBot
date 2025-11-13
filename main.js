@@ -230,6 +230,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 // 🔑 CRITICAL FIX: Use a placeholder password that meets the 8-character minimum.
                 const TEMP_PASSWORD = 'ImmunoBotPassword123';
                 
+                // The full payload with placeholder/default values to satisfy all required API fields
                 const registerPayload = {
                     first_name: firstName,
                     last_name: lastName,
@@ -238,7 +239,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     password: TEMP_PASSWORD, 
                     phone_number: state.data.whatsapp_number,
                     
-                    // ✅ FIX: Use the collected gender to satisfy the CHECK constraint
+                    // ✅ FIX 1: Use the collected gender to satisfy the CHECK constraint
                     gender: state.data.gender, 
                     
                     role: "guardian", // CRITICAL: Sets the user role for the Parent
@@ -246,7 +247,8 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     national_id: 0, // Placeholder
                     date_of_birth: "2000-01-01T00:00:00Z", // Placeholder
                     address: `${state.data.nearest_clinic}, ${state.data.residence_location}`, 
-                    marital_status: "UNKNOWN", // Placeholder
+                    // ✅ FIX 2: Added a valid placeholder value for marital_status to pass the SQL CHECK constraint
+                    marital_status: "Single", // Placeholder. Use a valid enum value from your DB.
                     next_of_kin: state.data.official_name, // Use self as placeholder
                     next_of_kin_contact: state.data.whatsapp_number, // Use self-contact as placeholder
                     no_of_children: 0, 
@@ -256,7 +258,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                 result = await saveToLaravel('/api/register', registerPayload);
 
                 if (result.success) {
-                    // 🛠️ FIX 2: Set reply here before deleting state to prevent (#100)
+                    // 🛠️ FIX 3: Set reply here before deleting state to prevent (#100)
                     reply = `Success! Parent ${state.data.official_name} is successfully registered via the API. You can now use Option 2 to register their baby/child.\n\n${MAIN_MENU}`;
                 } else {
                     // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
@@ -291,7 +293,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
         userState.set(senderId, { ...state, step: nextStep });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 2: Send success message here, as userState is deleted above.
+        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply); 
     }
 }
@@ -374,11 +376,11 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
         case 7: // Confirmation (Y/N)
             if (userInput === 'y') {
                 isConfirmed = true;
-                // 🛠️ FIX 1: Changed '/babies' to '/api/babies' to fix the 404 error.
+                // 🛠️ FIX 4: Changed '/babies' to '/api/babies' to fix the 404 error.
                 result = await saveToLaravel('/api/babies', state.data);
 
                 if (result.success) {
-                    // 🛠️ FIX 2: Set reply here before deleting state to prevent (#100)
+                    // 🛠️ FIX 3: Set reply here before deleting state to prevent (#100)
                     reply = `Success! Baby ${state.data.first_name} is registered and the immunization schedule will be created on your backend. Thank you for your work!\n\n${MAIN_MENU}`;
                 } else {
                     // --- IMPROVEMENT 2: FULL ERROR LOGGING & PARSING ---
@@ -413,7 +415,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
         userState.set(senderId, { ...state, step: nextStep, data: state.data });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 2: Send success message here, as userState is deleted above.
+        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply);
     }
 }
@@ -476,7 +478,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart)
                     chw_number: state.data.chw_number,
                 };
                 
-                // 🛠️ FIX 1: Changed '/appointments' to '/api/appointments' to fix the 404 error.
+                // 🛠️ FIX 4: Changed '/appointments' to '/api/appointments' to fix the 404 error.
                 result = await saveToLaravel('/api/appointments', payload);
 
                 if (result.success) {
@@ -501,7 +503,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart)
         userState.set(senderId, { ...state, step: nextStep, data: state.data });
         await sendMessage(senderId, reply);
     } else if (isConfirmed && result.success) {
-        // 🛠️ FIX 2: Send success message here, as userState is deleted above.
+        // 🛠️ FIX 3: Send success message here, as userState is deleted above.
         await sendMessage(senderId, reply);
     }
 }
@@ -518,7 +520,7 @@ async function handleModifyCancelAppointment(senderId, state, incomingText, user
                 break; // Stay on step 1
             }
             
-            // 🛠️ FIX 1: Included '/api/' prefix
+            // 🛠️ FIX 4: Included '/api/' prefix
             const appointmentResponse = await fetchFromLaravel(`/api/appointments/${state.data.baby_id}`);
             
             if (!appointmentResponse || !appointmentResponse.appointments || appointmentResponse.appointments.length === 0) {
@@ -585,7 +587,7 @@ What would you like to do?
             const newNote = parts.slice(1).join(', ') || "Modified by CHW via WhatsApp.";
 
             if (/\d{4}-\d{2}-\d{2}/.test(newDate)) {
-                // 🛠️ FIX 1: Included '/api/' prefix
+                // 🛠️ FIX 4: Included '/api/' prefix
                 let result = await saveToLaravel(`/api/appointments/${state.data.appointment_id}`, { 
                     appointment_date: newDate + "T00:00:00Z",
                     notes: newNote,
@@ -606,7 +608,7 @@ What would you like to do?
 
         case 5: // Execute Cancel (DELETE)
             if (userInput.toLowerCase() === 'yes') {
-                // 🛠️ FIX 1: Included '/api/' prefix
+                // 🛠️ FIX 4: Included '/api/' prefix
                 let result = await saveToLaravel(`/api/appointments/${state.data.appointment_id}`, null, "DELETE");
 
                 if (result.success) {
@@ -622,7 +624,7 @@ What would you like to do?
             break;
     }
 
-    // 🛠️ FIX 2: Consolidated sending logic. If the state is deleted (success/end of flow), the condition below is false.
+    // 🛠️ FIX 3: Consolidated sending logic. If the state is deleted (success/end of flow), the condition below is false.
     if (userState.get(senderId)) {
         await sendMessage(senderId, reply);
     }
@@ -666,78 +668,76 @@ app.post('/whatsapp/webhook', (req, res) => {
                             const incomingText = message.text.body.trim();
                             const userInput = incomingText.toLowerCase();
 
-                            // Retrieve or initialize user state
-                            let state = userState.get(senderId) || { flow: 'menu', step: 0, data: {} };
-                            let reply = '';
-                            
-                            // 1. GLOBAL CANCEL/MENU COMMAND
-                            if (userInput === 'cancel' || userInput === 'menu') {
-                                userState.delete(senderId);
-                                state = { flow: 'menu', step: 0, data: {} };
-                                reply = `You have returned to the main menu.\n\n${MAIN_MENU}`;
-                                sendMessage(senderId, reply);
-                                continue;
-                            }
+                            // Retrieve or initialize the user's conversation state
+                            let state = userState.get(senderId);
 
-                            // 2. ACTIVE FLOW HANDLER
-                            if (state.flow !== 'menu' && state.step > 0) {
-                                // Delegate to the appropriate flow handler based on the saved state
-                                switch (state.flow) {
-                                    case 'register_parent':
-                                        handleRegisterParent(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'register_baby':
-                                        handleRegisterBaby(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'create_appointment':
-                                        handleCreateAppointment(senderId, state, incomingText, userInput);
-                                        break;
-                                    case 'manage_appointment':
-                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
-                                        break;
-                                    default:
-                                        // Should not happen, but a safe fallback
-                                        reply = `Error: Unknown flow. Returning to main menu.\n\n${MAIN_MENU}`;
-                                        userState.delete(senderId);
-                                        sendMessage(senderId, reply);
+                            // --- Global CANCEL Command ---
+                            if (userInput === 'cancel') {
+                                if (state) {
+                                    userState.delete(senderId);
+                                    sendMessage(senderId, `Operation cancelled. Returning to main menu.\n\n${MAIN_MENU}`);
+                                } else {
+                                    sendMessage(senderId, MAIN_MENU);
                                 }
                                 continue;
                             }
 
-                            // 3. MAIN MENU SELECTION
-                            switch (userInput) {
-                                case '1':
-                                case 'register new parent/guardian (household)':
-                                    reply = "--- New Parent (1/5) ---\nPlease enter the Parent/Guardian's Official Name (or official ID name):";
-                                    userState.set(senderId, { flow: 'register_parent', step: 1, data: {} });
-                                    break;
-                                case '2':
-                                case 'register new baby (child & schedule)':
-                                    reply = "--- New Baby (1/7) ---\nPlease enter the *numeric Guardian ID* for this baby's parent:";
-                                    userState.set(senderId, { flow: 'register_baby', step: 1, data: {} });
-                                    break;
-                                case '3':
-                                case 'create ad-hoc appointment':
-                                    reply = "--- New Appointment (1/4) ---\nPlease enter the *numeric Baby ID* for the appointment:";
-                                    userState.set(senderId, { flow: 'create_appointment', step: 1, data: {} });
-                                    break;
-                                case '4':
-                                case 'modify/cancel appointment':
-                                    reply = "--- Manage Appointment (1/2) ---\nPlease enter the *numeric Baby ID* whose appointments you want to manage:";
-                                    userState.set(senderId, { flow: 'manage_appointment', step: 1, data: {} });
-                                    break;
-                                default:
-                                    // Send the main menu if input is unrecognized and not part of an active flow
-                                    reply = `I didn't recognize that command. Please select a number from the menu.\n\n${MAIN_MENU}`;
+                            // --- Start/Restart Conversation (No current state or initial message) ---
+                            if (!state) {
+                                switch (userInput) {
+                                    case '1':
+                                        state = { flow: 'registerParent', step: 1, data: {} };
+                                        userState.set(senderId, state);
+                                        sendMessage(senderId, `--- New Parent (1/5) ---\nPlease enter the Parent/Guardian's **Official Name** (as per ID) or their **National ID number** (e.g., Jane Wanjiku or 12345678):`);
+                                        break;
+                                    case '2':
+                                        state = { flow: 'registerBaby', step: 1, data: {} };
+                                        userState.set(senderId, state);
+                                        sendMessage(senderId, `--- New Baby (1/7) ---\nTo link the baby, please enter the **Parent/Guardian's numeric ID** (received after Option 1 registration, e.g., 25):`);
+                                        break;
+                                    case '3':
+                                        state = { flow: 'createAppointment', step: 1, data: {} };
+                                        userState.set(senderId, state);
+                                        sendMessage(senderId, `--- New Appointment (1/4) ---\nPlease enter the **Baby's numeric ID** for this ad-hoc appointment (e.g., 42):`);
+                                        break;
+                                    case '4':
+                                        state = { flow: 'modifyCancelAppointment', step: 1, data: {} };
+                                        userState.set(senderId, state);
+                                        sendMessage(senderId, `--- Modify/Cancel Appointment (1/?) ---\nPlease enter the **Baby's numeric ID** to view their current appointments:`);
+                                        break;
+                                    default:
+                                        sendMessage(senderId, MAIN_MENU);
+                                        break;
+                                }
+                                continue;
                             }
 
-                            // Send the main menu reply for selections that started a flow
-                            if (state.flow === 'menu') {
-                                sendMessage(senderId, reply);
+                            // --- Continue Existing Flow ---
+                            try {
+                                switch (state.flow) {
+                                    case 'registerParent':
+                                        handleRegisterParent(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'registerBaby':
+                                        handleRegisterBaby(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'createAppointment':
+                                        handleCreateAppointment(senderId, state, incomingText, userInput);
+                                        break;
+                                    case 'modifyCancelAppointment':
+                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
+                                        break;
+                                    default:
+                                        console.error(`Unknown flow: ${state.flow}`);
+                                        userState.delete(senderId);
+                                        sendMessage(senderId, `An unexpected error occurred. Please try again or type CANCEL.\n\n${MAIN_MENU}`);
+                                        break;
+                                }
+                            } catch (e) {
+                                console.error(`Error processing flow ${state.flow}:`, e);
+                                userState.delete(senderId);
+                                sendMessage(senderId, `A critical error occurred while processing your request: ${e.message.slice(0, 100)}... Returning to main menu. Please try again.\n\n${MAIN_MENU}`);
                             }
-                        } else if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
-                            // Message from an unauthorized number
-                            sendMessage(senderId, "Hello! I am Immuno, the Community Health Worker assistant. Access is restricted to authorized CHWs only.");
                         }
                     }
                 }
@@ -746,7 +746,7 @@ app.post('/whatsapp/webhook', (req, res) => {
     }
 });
 
-// --- START SERVER ---
+// --- Server Startup ---
 app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+    console.log(`\nWhatsApp Bot running on port ${port}`);
 });
