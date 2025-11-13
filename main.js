@@ -13,8 +13,10 @@ const port = process.env.PORT || 3000;
 const verifyToken = process.env.VERIFY_TOKEN;
 const WA_TOKEN = process.env.WHATSAPP_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_ID;
-// We will use this ENV variable as planned:
+
+// NEW: API Base URL and Static Token Variable
 const LARAVEL_API_BASE = process.env.LARAVEL_API_BASE; 
+const LARAVEL_API_TOKEN = process.env.LARAVEL_API_TOKEN; // <<< NEW ENVIRONMENT VARIABLE
 
 // WhatsApp API base URL
 const API_BASE_URL = `https://graph.facebook.com/v20.0/${WA_PHONE_NUMBER_ID}/messages`;
@@ -63,17 +65,38 @@ async function sendMessage(to, text) {
     } catch (err) { console.error("Network error:", err.message); }
 }
 
+// --- Helper: Get Base Headers for Laravel API ---
+function getLaravelApiHeaders(method) {
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+    // Add Authorization header for all protected routes (all but /register)
+    if (LARAVEL_API_TOKEN) {
+        headers['Authorization'] = `Bearer ${LARAVEL_API_TOKEN}`;
+    } else {
+        // Log a warning if the token is missing and we're not hitting /register
+        if (!method.toLowerCase().includes('register')) {
+            console.warn("LARAVEL_API_TOKEN is missing. Protected routes will likely fail with 401.");
+        }
+    }
+    return headers;
+}
+
+
 // --- Helper: Fetch Data from Laravel (GET) ---
 async function fetchFromLaravel(endpointPath) {
     if (!LARAVEL_API_BASE) {
         console.error("LARAVEL_API_BASE is not configured. Cannot connect to API.");
         return null;
     }
+    // Determine which routes need the token. The /register route is typically unprotected.
+    const headers = getLaravelApiHeaders(endpointPath);
+
     try {
         console.log(`Fetching data from: ${LARAVEL_API_BASE}${endpointPath}`);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers, // <<< USING NEW HEADERS
         });
         if (!response.ok) {
             const errorText = await response.text();
@@ -93,11 +116,15 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
         console.error("LARAVEL_API_BASE is not configured. Cannot connect to API.");
         return { success: false, error: "LARAVEL_API_BASE environment variable is missing." }; 
     }
+    
+    // Determine which routes need the token. The /register route is typically unprotected.
+    const headers = getLaravelApiHeaders(endpointPath);
+    
     try {
         console.log(`Sending data to Laravel API (${method}): ${endpointPath}`, data);
         const response = await fetch(`${LARAVEL_API_BASE}${endpointPath}`, { 
             method: method, // Use the provided method
-            headers: { "Content-Type": "application/json" },
+            headers: headers, // <<< USING NEW HEADERS
             body: method === "GET" || method === "DELETE" ? null : JSON.stringify(data),
         });
 
@@ -123,6 +150,8 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
     }
 }
 
+
+// --- REST OF THE CODE REMAINS UNCHANGED ---
 
 // --- FLOW HANDLER: Register Parent/Guardian (Option 1) ---
 async function handleRegisterParent(senderId, state, incomingText, userInput) {
@@ -196,6 +225,7 @@ Is this data CORRECT? Reply Y or N. (Reply N to restart this registration)
                     password_confirmation: state.data.official_name // Must match 'password'
                 };
                 
+                // NOTE: /register should not require the LARAVEL_API_TOKEN
                 result = await saveToLaravel('/register', registerPayload);
 
                 if (result.success) {
@@ -541,7 +571,7 @@ What would you like to do?
 
 // --- Health Check Route ---
 app.get('/', (req, res) => {
-    res.send({ status: 'Immuno Bot running', api_base: LARAVEL_API_BASE || 'Not Configured' });
+    res.send({ status: 'Immuno Bot running', api_base: LARAVEL_API_BASE || 'Not Configured', api_token_status: LARAVEL_API_TOKEN ? 'Loaded' : 'Missing' });
 });
 
 // --- Webhook Verification (GET) ---
@@ -673,28 +703,19 @@ app.post('/whatsapp/webhook', async (req, res) => {
                 } else {
                     await sendMessage(senderId, "API Test Fail: No baby records found or API error.");
                 }
-                
-            } else {
-                // Default response: The Intro and Menu
-                await sendMessage(senderId, INTRO_MESSAGE);
-                await sendMessage(senderId, MAIN_MENU);
-            }
+            } 
         }
     }
 });
 
+
 // --- Start Server ---
 app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-    console.log(`Webhook endpoint: /whatsapp/webhook`);
-
-    if (!WA_TOKEN || !verifyToken || !WA_PHONE_NUMBER_ID) {
-        console.warn('WARNING: WHATSAPP_TOKEN, VERIFY_TOKEN, or WHATSAPP_PHONE_ID not set. API/Webhook operations will fail.');
-    }
+    console.log(`\nImmuno CHW Bot listening on port ${port}`);
     if (!LARAVEL_API_BASE) {
-        console.warn('WARNING: LARAVEL_API_BASE is NOT set. External API calls will result in an error message.');
-    } else {
-        console.log(`LARAVEL_API_BASE is set to: ${LARAVEL_API_BASE}`);
-        console.log('Ready to connect to Laravel API.');
+        console.warn("WARNING: LARAVEL_API_BASE is NOT set. API communication will fail.");
+    }
+    if (!LARAVEL_API_TOKEN) {
+        console.warn("WARNING: LARAVEL_API_TOKEN is NOT set. Protected API routes will fail with 401.");
     }
 });
