@@ -715,6 +715,7 @@ app.post('/whatsapp/webhook', (req, res) => {
 app.listen(port, () => {
     console.log(`\nImmuno CHW Bot listening on port ${port}`);
     if (!LARAVEL_API_BASE) {
+        console.log("LARAVEL_API_BASE is NOT set. Please configure it in the .env file.");
         console.warn("WARNING: LARAVEL_API_BASE is NOT set. API communication will fail.");
     }
     if (!LARAVEL_API_TOKEN) {
