@@ -368,7 +368,7 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
         case 6: // Collecting Nationality
             state.data.nationality = incomingText;
             
-            state.data.immunization_status = "PENDING_SCHEDULE";
+            state.data.immunization_status = "Pending";
             state.data.last_vaccine_received = "NONE";
             state.data.next_appointment_date = null; 
 
