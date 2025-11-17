@@ -82,7 +82,7 @@ function getLaravelApiHeaders(endpointPath) {
     if (LARAVEL_API_TOKEN) {
         headers['Authorization'] = `Bearer ${LARAVEL_API_TOKEN}`;
     } else if (!endpointPath.toLowerCase().includes('register')) {
-         console.warn("LARAVEL_API_TOKEN is missing. Protected routes will likely fail with 401.");
+           console.warn("LARAVEL_API_TOKEN is missing. Protected routes will likely fail with 401.");
     }
     return headers;
 }
@@ -148,12 +148,13 @@ async function saveToLaravel(endpointPath, data, method = "POST") {
     }
 }
 
-// --- Helper: Get Guardian Database ID using National ID (REQUIRED for Option 2) ---
+// --- Helper: Get Guardian Database Record using National ID (REQUIRED for Option 2) ---
+// 💡 CHANGE: This function now returns the full guardian record, including the name.
 async function getGuardianIdByNationalId(nationalId) {
     // ⚠️ IMPORTANT: You MUST implement this endpoint in Laravel: /api/guardians/national_id/{nationalId}
     const apiResponse = await fetchFromLaravel(`/api/guardians/national_id/${nationalId}`);
-    // Assuming the API returns a response like: { id: 123, ... } or null if not found
-    return apiResponse?.id || null; 
+    // Assuming the API returns a response like: { id: 123, first_name: "Cyrus", last_name: "Ngugi", ... } or null if not found
+    return apiResponse || null; 
 }
 
 
@@ -318,18 +319,24 @@ async function handleRegisterBaby(senderId, state, incomingText, userInput) {
             }
             
             // ⭐️ CRITICAL: Check if the National ID exists and get the database ID
-            const guardianDbId = await getGuardianIdByNationalId(nationalId);
+            // 💡 UPDATED: Fetch the full guardian record
+            const guardianRecord = await getGuardianIdByNationalId(nationalId);
             
-            if (!guardianDbId) {
+            // 💡 UPDATED: Check if the record is null or missing the required ID
+            if (!guardianRecord || !guardianRecord.id) {
                 reply = `Error: Parent with National ID ${nationalId} not found. Please register the parent first (Option 1). Type CANCEL to return to the menu.`;
                 userState.delete(senderId); // End the flow
                 return;
             }
             
-            state.data.guardian_id = guardianDbId; // Store the *database ID* for the API payload
+            // 💡 NEW: Extract the name from the fetched record
+            const guardianFullName = `${guardianRecord.first_name || ''} ${guardianRecord.last_name || ''}`.trim();
+            
+            state.data.guardian_id = guardianRecord.id; // Store the *database ID* for the API payload
             state.data.guardian_national_id = nationalId; // Store the *national ID* for confirmation message
             
-            reply = "--- New Baby (2/7) ---\nParent found! Please enter the baby's First Name (or official ID name):";
+            // 💡 UPDATED: Display the full name for confirmation
+            reply = `--- New Baby (2/7) ---\nParent **${guardianFullName || `ID ${nationalId}`}** found! Please enter the baby's First Name (or official ID name):`;
             break;
 
         case 2: // Collecting First Name
@@ -691,50 +698,60 @@ app.post('/whatsapp/webhook', (req, res) => {
                             if (userInput === 'cancel') {
                                 userState.delete(senderId);
                                 sendMessage(senderId, `Conversation cancelled. Returning to the main menu.\n\n${MAIN_MENU}`);
-                                continue;
+                                continue; 
                             }
 
+                            // --- Initialize or Continue Conversation ---
                             if (!state) {
-                                // --- Start of a new conversation or response to MAIN_MENU ---
-                                if (userInput === '1' || userInput.includes('register parent')) {
-                                    state = { flow: 'parent', step: 1, data: {} };
-                                    // ✅ CHANGE 3: Updated prompt to only ask for name
-                                    sendMessage(senderId, "--- New Parent (1/6) ---\nPlease enter the Parent/Guardian's Official Name:");
+                                // First message or flow finished, look for a menu option
+                                if (['1', '2', '3', '4'].includes(userInput)) {
+                                    const flowMap = {
+                                        '1': handleRegisterParent,
+                                        '2': handleRegisterBaby,
+                                        '3': handleCreateAppointment,
+                                        '4': handleModifyCancelAppointment,
+                                    };
+                                    const flowNames = {
+                                        '1': 'RegisterParent',
+                                        '2': 'RegisterBaby',
+                                        '3': 'CreateAppointment',
+                                        '4': 'ModifyCancelAppointment',
+                                    };
+                                    
+                                    // Set initial state and trigger the first step of the flow
+                                    state = { step: 1, flow: flowNames[userInput], handler: flowMap[userInput], data: {} };
                                     userState.set(senderId, state);
-                                } else if (userInput === '2' || userInput.includes('register baby')) {
-                                    state = { flow: 'baby', step: 1, data: {} };
-                                    sendMessage(senderId, "--- New Baby (1/7) ---\nPlease enter the **Parent/Guardian's National ID Number** to link the baby:");
-                                    userState.set(senderId, state);
-                                } else if (userInput === '3' || userInput.includes('create appointment')) {
-                                    state = { flow: 'appointment', step: 1, data: {} };
-                                    sendMessage(senderId, "--- New Appointment (1/4) ---\nPlease enter the *Baby ID* for this ad-hoc appointment:");
-                                    userState.set(senderId, state);
-                                } else if (userInput === '4' || userInput.includes('modify cancel')) {
-                                     state = { flow: 'modify_cancel', step: 1, data: {} };
-                                    sendMessage(senderId, "--- Modify/Cancel Appointment (1/2) ---\nPlease enter the *Baby ID* to view active appointments:");
-                                    userState.set(senderId, state);
+
+                                    // Send the initial prompt for the selected flow
+                                    let initialReply = '';
+                                    switch(userInput) {
+                                        case '1':
+                                            initialReply = "--- New Parent (1/6) ---\nPlease enter the Parent/Guardian's Official Name (e.g., Cyrus Ngugi):";
+                                            break;
+                                        case '2':
+                                            // Start the baby registration flow by asking for the parent's ID
+                                            initialReply = "--- New Baby (1/7) ---\nPlease enter the Parent/Guardian's **National ID Number** to link the baby:";
+                                            break;
+                                        case '3':
+                                            initialReply = "--- New Appointment (1/4) ---\nPlease enter the **Baby ID** for the ad-hoc appointment:";
+                                            break;
+                                        case '4':
+                                            initialReply = "--- Manage Appointment (1/?) ---\nPlease enter the **Baby ID** whose appointments you want to manage:";
+                                            break;
+                                    }
+                                    sendMessage(senderId, initialReply);
+
                                 } else {
                                     // Send the introductory and main menu message
                                     sendMessage(senderId, `${INTRO_MESSAGE}\n\n${MAIN_MENU}`);
                                 }
                             } else {
-                                // --- Continue an existing flow ---
-                                try {
-                                    if (state.flow === 'parent') {
-                                        handleRegisterParent(senderId, state, incomingText, userInput);
-                                    } else if (state.flow === 'baby') {
-                                        handleRegisterBaby(senderId, state, incomingText, userInput);
-                                    } else if (state.flow === 'appointment') {
-                                        handleCreateAppointment(senderId, state, incomingText, userInput);
-                                    } else if (state.flow === 'modify_cancel') {
-                                        handleModifyCancelAppointment(senderId, state, incomingText, userInput);
-                                    }
-                                } catch (error) {
-                                    console.error(`Error in flow handler for ${senderId} (${state.flow}):`, error);
-                                    sendMessage(senderId, "⚠️ An unexpected error occurred. Type CANCEL to return to the main menu.");
-                                    userState.delete(senderId);
-                                }
+                                // Continue the existing flow
+                                state.handler(senderId, state, incomingText, userInput);
                             }
+                        } else if (!AUTHORIZED_CHW_NUMBERS.includes(senderId)) {
+                            // Optionally reply to unauthorized users
+                            sendMessage(senderId, "Hello! I am the Immuno CHW assistant bot. My services are restricted to authorized Community Health Workers only. Please contact your supervisor for access.");
                         }
                     }
                 }
@@ -743,8 +760,7 @@ app.post('/whatsapp/webhook', (req, res) => {
     }
 });
 
-// --- Start Server ---
+// --- START SERVER ---
 app.listen(port, () => {
-    console.log(`\nServer is running on port ${port}`);
-    console.log(`WhatsApp Webhook listening at http://localhost:${port}/whatsapp/webhook`);
+    console.log(`Server is running on port ${port}`);
 });
